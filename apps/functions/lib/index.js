@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deliverWeeklyReport = exports.deliverDailyReport = exports.scheduledCollection = exports.collectRealData = exports.sendWeeklyReport = exports.sendDailyReport = exports.runCollection = exports.getNews = exports.deliverNews = exports.translateDeliveryTargetNews = exports.cleanupNews = exports.clearAllNews = exports.deleteCompany = exports.updateCompany = exports.addCompany = exports.getCompanies = void 0;
+exports.deliverWeeklyReport = exports.deliverDailyReport = exports.scheduledCollection = exports.collectRealData = exports.runCollection = exports.getNews = exports.deliverNews = exports.translateDeliveryTargetNews = exports.cleanupNews = exports.deleteCompany = exports.updateCompany = exports.addCompany = exports.getCompanies = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const app_1 = require("firebase-admin/app");
@@ -467,27 +467,6 @@ exports.deleteCompany = (0, https_1.onRequest)({
     }
 });
 // 全ニュース記事削除API（テスト用）
-exports.clearAllNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-    secrets: [webAppUrl]
-}, async (req, res) => {
-    try {
-        const newsSnapshot = await db.collection("news").get();
-        const batch = db.batch();
-        newsSnapshot.docs.forEach(doc => {
-            batch.delete(doc.ref);
-        });
-        await batch.commit();
-        res.json({
-            success: true,
-            message: `${newsSnapshot.docs.length}件の記事が削除されました`
-        });
-    }
-    catch (error) {
-        firebase_functions_1.logger.error("Error clearing news:", error);
-        res.status(500).json({ success: false, error: "Failed to clear news" });
-    }
-});
 // 記事クリーンナップAPI（完全削除・デバッグ用）
 exports.cleanupNews = (0, https_1.onRequest)({
     cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
@@ -788,36 +767,6 @@ exports.runCollection = (0, https_1.onRequest)({
             success: false,
             error: "情報収集の実行中にエラーが発生しました"
         });
-    }
-});
-// 日次レポート送信API
-exports.sendDailyReport = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-    secrets: [webAppUrl]
-}, async (req, res) => {
-    try {
-        firebase_functions_1.logger.info("日次レポートが送信されました (モック)");
-        // ここに実際の日次レポート送信ロジックを実装
-        res.json({ success: true, message: "日次レポートが送信されました (モック)" });
-    }
-    catch (error) {
-        firebase_functions_1.logger.error("Error sending daily report:", error);
-        res.status(500).json({ success: false, error: "Failed to send daily report" });
-    }
-});
-// 週次レポート送信API
-exports.sendWeeklyReport = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-    secrets: [webAppUrl]
-}, async (req, res) => {
-    try {
-        firebase_functions_1.logger.info("週次レポートが送信されました (モック)");
-        // ここに実際の週次レポート送信ロジックを実装
-        res.json({ success: true, message: "週次レポートが送信されました (モック)" });
-    }
-    catch (error) {
-        firebase_functions_1.logger.error("Error sending weekly report:", error);
-        res.status(500).json({ success: false, error: "Failed to send weekly report" });
     }
 });
 // 実データ収集API（テスト用）
