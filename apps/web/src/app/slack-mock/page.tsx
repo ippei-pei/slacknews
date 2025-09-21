@@ -53,7 +53,7 @@ export default function SlackMockPage() {
     
     const selectedDateObj = new Date(selectedDate);
     const startOfWeek = new Date(selectedDateObj);
-    startOfWeek.setDate(selectedDateObj.getDate() - selectedDateObj.getDay()); // 日曜日を週の開始とする
+    startOfWeek.setDate(selectedDateObj.getDate() - selectedDateObj.getDay());
     startOfWeek.setHours(0, 0, 0, 0);
     
     const endOfWeek = new Date(startOfWeek);
@@ -71,9 +71,9 @@ export default function SlackMockPage() {
     const filteredNews = getFilteredNews();
     const translatedNews = filteredNews.filter(article => article.isTranslated);
     const untranslatedNews = filteredNews.filter(article => !article.isTranslated);
-
+    
     console.log(`📊 日次レポート生成: ${selectedDate} - データベースから取得した記事 ${filteredNews.length} 件を処理`);
-
+    
     return {
       date: selectedDate,
       totalArticles: filteredNews.length,
@@ -87,7 +87,6 @@ export default function SlackMockPage() {
   const generateWeeklyReport = () => {
     const weeklyNews = getWeeklyNews();
     const translatedNews = weeklyNews.filter(article => article.isTranslated);
-    const untranslatedNews = weeklyNews.filter(article => !article.isTranslated);
     
     console.log(`📊 週次レポート生成: ${selectedDate}週 - データベースから取得した記事 ${weeklyNews.length} 件を処理`);
     
@@ -99,103 +98,91 @@ export default function SlackMockPage() {
       return acc;
     }, {} as Record<string, NewsArticle[]>);
 
-    // 競合の動きを分析
-    const competitorAnalysis = Object.entries(newsByCompany).map(([companyId, articles]) => {
+    // 競合の動きサマリ（200文字程度）
+    const competitorSummary = generateCompetitorSummary(weeklyNews);
+    
+    // 各社の動きサマリ（100文字程度）
+    const companySummaries = Object.entries(newsByCompany).map(([companyId, articles]) => {
       const companyName = companyId === 'TEST_RANDOM' ? 'テスト用ランダム記事' : `企業ID: ${companyId}`;
-      const translatedCount = articles.filter(a => a.isTranslated).length;
-      const highImportanceCount = articles.filter(a => a.importance >= 4).length;
-      
       return {
         companyId,
         companyName,
-        totalArticles: articles.length,
-        translatedArticles: translatedCount,
-        highImportanceArticles: highImportanceCount,
-        articles: articles
+        summary: generateCompanySummary(articles)
       };
     });
 
-    // 全体サマリ
-    const totalCompetitorArticles = weeklyNews.length;
-    const totalTranslatedArticles = translatedNews.length;
-    const highImportanceArticles = weeklyNews.filter(a => a.importance >= 4).length;
-    const averageImportance = weeklyNews.length > 0 
-      ? (weeklyNews.reduce((sum, a) => sum + a.importance, 0) / weeklyNews.length).toFixed(1)
-      : 0;
-
-    // 自社が取るべき動きの提案
-    const strategicRecommendations = generateStrategicRecommendations(weeklyNews, competitorAnalysis);
+    // 自社が取るべき動き（200文字程度）
+    const strategicAction = generateStrategicAction(weeklyNews, companySummaries);
 
     return {
       weekStart: new Date(selectedDate).toISOString().split('T')[0],
       totalArticles: weeklyNews.length,
       translatedArticles: translatedNews.length,
-      untranslatedArticles: untranslatedNews.length,
-      competitorAnalysis,
-      totalCompetitorArticles,
-      totalTranslatedArticles,
-      highImportanceArticles,
-      averageImportance,
-      strategicRecommendations
+      competitorSummary,
+      companySummaries,
+      strategicAction
     };
   };
 
-  // 戦略的推奨事項の生成
-  const generateStrategicRecommendations = (weeklyNews: NewsArticle[], competitorAnalysis: any[]) => {
-    const recommendations = [];
-    
-    // 高重要度記事の分析
-    const highImportanceArticles = weeklyNews.filter(a => a.importance >= 4);
-    if (highImportanceArticles.length > 0) {
-      recommendations.push({
-        type: 'urgent',
-        title: '緊急対応が必要',
-        description: `${highImportanceArticles.length}件の高重要度記事が発生しています。競合の重要な動きを詳細に分析し、迅速な対応を検討してください。`
-      });
+  // 競合の動きサマリ生成（200文字程度）
+  const generateCompetitorSummary = (weeklyNews: NewsArticle[]): string => {
+    if (weeklyNews.length === 0) {
+      return "今週は競合の動きに関する記事はありませんでした。";
     }
 
-    // 翻訳率の分析
-    const translationRate = weeklyNews.length > 0 ? (weeklyNews.filter(a => a.isTranslated).length / weeklyNews.length) * 100 : 0;
-    if (translationRate < 80) {
-      recommendations.push({
-        type: 'process',
-        title: '翻訳プロセスの改善',
-        description: `翻訳率が${translationRate.toFixed(1)}%と低いです。翻訳プロセスの効率化を検討してください。`
-      });
-    }
-
-    // 競合の動きの分析
-    const activeCompetitors = competitorAnalysis.filter(c => c.totalArticles > 0);
-    if (activeCompetitors.length > 0) {
-      const mostActiveCompetitor = activeCompetitors.reduce((max, current) => 
-        current.totalArticles > max.totalArticles ? current : max
-      );
-      recommendations.push({
-        type: 'competitive',
-        title: '競合監視の強化',
-        description: `${mostActiveCompetitor.companyName}が最も活発です（${mostActiveCompetitor.totalArticles}件）。特に注目して監視を強化してください。`
-      });
-    }
-
-    // カテゴリ別の分析
-    const categoryAnalysis = weeklyNews.reduce((acc, article) => {
+    const categories = weeklyNews.reduce((acc, article) => {
       acc[article.category] = (acc[article.category] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    
-    const topCategory = Object.entries(categoryAnalysis).reduce((max, current) => 
-      current[1] > max[1] ? current : max, ['', 0]
-    );
-    
-    if (topCategory[1] > 0) {
-      recommendations.push({
-        type: 'market',
-        title: '市場動向の把握',
-        description: `「${topCategory[0]}」カテゴリの記事が${topCategory[1]}件と最多です。この分野の市場動向を重点的に調査してください。`
-      });
+
+    const topCategories = Object.entries(categories)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 3)
+      .map(([category, count]) => `${category}(${count}件)`)
+      .join('、');
+
+    const highImportanceCount = weeklyNews.filter(a => a.importance >= 4).length;
+    const highImportanceText = highImportanceCount > 0 ? `特に重要度の高い記事が${highImportanceCount}件` : '';
+
+    return `今週は競合から${weeklyNews.length}件の記事が確認されました。主な分野は${topCategories}です。${highImportanceText}。市場では技術革新や新サービス発表が活発で、競合各社が積極的な動きを見せています。`;
+  };
+
+  // 各社の動きサマリ生成（100文字程度）
+  const generateCompanySummary = (articles: NewsArticle[]): string => {
+    if (articles.length === 0) {
+      return "今週の動きはありませんでした。";
     }
 
-    return recommendations;
+    const translatedArticles = articles.filter(a => a.isTranslated);
+    const mainTopics = articles.slice(0, 2).map(a => 
+      a.isTranslated ? a.translatedTitle : a.title
+    ).join('、');
+
+    return `${articles.length}件の記事を確認。主な内容は「${mainTopics}」など。${translatedArticles.length}件が翻訳済み。`;
+  };
+
+  // 自社が取るべき動き生成（200文字程度）
+  const generateStrategicAction = (weeklyNews: NewsArticle[], companySummaries: any[]): string => {
+    if (weeklyNews.length === 0) {
+      return "今週は競合の動きが少なく、現状維持を継続することを推奨します。市場の動向を引き続き監視し、次週以降の動きに備えてください。";
+    }
+
+    const highImportanceArticles = weeklyNews.filter(a => a.importance >= 4);
+    const activeCompanies = companySummaries.filter(c => c.summary !== "今週の動きはありませんでした。");
+    
+    let action = "今週の競合動向を踏まえ、以下の対応を推奨します：";
+    
+    if (highImportanceArticles.length > 0) {
+      action += ` 高重要度記事${highImportanceArticles.length}件について詳細分析を実施し、`;
+    }
+    
+    if (activeCompanies.length > 0) {
+      action += ` 特に活発な${activeCompanies.length}社の動向を重点監視し、`;
+    }
+    
+    action += " 自社の戦略的ポジションを再評価することをお勧めします。市場の変化に迅速に対応できる体制を整備してください。";
+
+    return action;
   };
 
   const currentReport = reportType === 'daily' ? generateDailyReport() : generateWeeklyReport();
@@ -205,38 +192,6 @@ export default function SlackMockPage() {
     <div className="container-fluid py-4">
       <div className="row">
         <div className="col-12">
-          {/* ヘッダー */}
-          <div className="alert alert-warning mb-4">
-            <h4 className="alert-heading">🧪 Slack モックページ（テスト用）</h4>
-            <p className="mb-0">
-              このページは<strong>テスト用</strong>のSlackモックページです。
-              実際のSlackに送信される日次・週次レポートの内容を確認できます。
-            </p>
-          </div>
-
-          {/* データソース情報 */}
-          <div className="alert alert-info mb-4">
-            <h6 className="alert-heading">📊 データソース情報</h6>
-            <div className="row">
-              <div className="col-md-6">
-                <strong>データ取得元:</strong> Firestore データベース
-              </div>
-              <div className="col-md-6">
-                <strong>現在の記事数:</strong> {news.length} 件
-              </div>
-            </div>
-            <div className="row mt-2">
-              <div className="col-md-6">
-                <strong>最終更新:</strong> {loading ? '読み込み中...' : new Date().toLocaleString('ja-JP')}
-              </div>
-              <div className="col-md-6">
-                <strong>データ状態:</strong> 
-                <span className={`badge ${loading ? 'bg-warning' : 'bg-success'} ms-1`}>
-                  {loading ? '読み込み中' : '最新'}
-                </span>
-              </div>
-            </div>
-          </div>
 
           {/* コントロールパネル */}
           <div className="card mb-4">
@@ -280,246 +235,200 @@ export default function SlackMockPage() {
             </div>
           </div>
 
-          {/* レポート統計 */}
-          <div className="card mb-4">
-            <div className="card-header">
-              <h5 className="card-title mb-0">
-                {reportType === 'daily' ? '日次' : '週次'}レポート統計
-              </h5>
-            </div>
-            <div className="card-body">
-              <div className="row">
-                <div className="col-md-3">
-                  <div className="card bg-primary text-white">
-                    <div className="card-body text-center">
-                      <h3>{currentReport.totalArticles}</h3>
-                      <p className="mb-0">総記事数</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="col-md-3">
-                  <div className="card bg-success text-white">
-                    <div className="card-body text-center">
-                      <h3>{currentReport.translatedArticles}</h3>
-                      <p className="mb-0">翻訳済み</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="col-md-3">
-                  <div className="card bg-warning text-white">
-                    <div className="card-body text-center">
-                      <h3>{currentReport.untranslatedArticles}</h3>
-                      <p className="mb-0">未翻訳</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="col-md-3">
-                  <div className="card bg-info text-white">
-                    <div className="card-body text-center">
-                      <h3>
-                        {currentReport.totalArticles > 0 
-                          ? Math.round((currentReport.translatedArticles / currentReport.totalArticles) * 100)
-                          : 0}%
-                      </h3>
-                      <p className="mb-0">翻訳率</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Slack風レポート表示 */}
+          {/* Slack表示テスト */}
           <div className="card">
             <div className="card-header">
-              <h5 className="card-title mb-0">
-                📱 Slack風レポート表示
-                <small className="text-muted ms-2">（データベースから取得した実際のデータを使用）</small>
-              </h5>
+              <h5 className="card-title mb-0">Slack表示テスト</h5>
             </div>
-            <div className="card-body">
-              <div className="slack-mock-container" style={{ 
-                backgroundColor: '#f8f9fa', 
-                border: '1px solid #dee2e6', 
-                borderRadius: '8px',
-                padding: '16px',
-                fontFamily: 'monospace'
+            <div className="card-body p-0">
+              {/* 実際のSlackの投稿表示 */}
+              <div style={{ 
+                backgroundColor: '#ffffff',
+                fontFamily: 'Lato, "Helvetica Neue", Arial, sans-serif',
+                fontSize: '15px',
+                lineHeight: '1.4'
               }}>
-                {isDailyReport ? (
-                  <div>
-                    <div className="mb-3">
-                      <strong>📰 日次ニュースレポート - {selectedDate}</strong>
+                {/* Slackの投稿メッセージ */}
+                <div style={{ 
+                  padding: '8px 16px',
+                  borderBottom: '1px solid #e8e8e8'
+                }}>
+                  {/* アカウントアイコンと表示名 */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '4px' }}>
+                    <div style={{ 
+                      width: '36px', 
+                      height: '36px', 
+                      borderRadius: '4px',
+                      backgroundColor: '#4a154b',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: '8px',
+                      flexShrink: 0
+                    }}>
+                      <span style={{ color: 'white', fontSize: '16px', fontWeight: 'bold' }}>📊</span>
                     </div>
-                    <div className="mb-3">
-                      <span className="badge bg-primary me-2">総記事数: {currentReport.totalArticles}</span>
-                      <span className="badge bg-success me-2">翻訳済み: {currentReport.translatedArticles}</span>
-                      <span className="badge bg-warning">未翻訳: {currentReport.untranslatedArticles}</span>
-                    </div>
-                    {isDailyReport && (currentReport as any).articles.length > 0 ? (
-                      <div>
-                        <strong>📋 記事一覧:</strong>
-                        <ul className="mt-2">
-                          {(currentReport as any).articles.map((article: NewsArticle, index: number) => (
-                            <li key={index} className="mb-2">
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2px' }}>
+                        <span style={{ 
+                          fontWeight: 'bold', 
+                          color: '#1d1c1d',
+                          marginRight: '8px'
+                        }}>
+                          News Bot
+                        </span>
+                        <span style={{ 
+                          fontSize: '12px', 
+                          color: '#616061'
+                        }}>
+                          {new Date().toLocaleString('ja-JP', { 
+                            month: 'numeric', 
+                            day: 'numeric', 
+                            hour: '2-digit', 
+                            minute: '2-digit' 
+                          })}
+                        </span>
+                      </div>
+                      
+                      {/* メッセージ内容 */}
+                      <div style={{ color: '#1d1c1d' }}>
+                        {isDailyReport ? (
+                          <div>
+                            <div style={{ marginBottom: '12px' }}>
+                              📰 日次ニュースレポート - {selectedDate}
+                            </div>
+                            
+                            {(currentReport as any).articles.length > 0 ? (
                               <div>
-                                <strong>
-                                  {article.isTranslated ? article.translatedTitle : article.title}
-                                </strong>
-                                {article.isTranslated && (
-                                  <span className="badge bg-success ms-2">翻訳済み</span>
+                                <div style={{ marginBottom: '12px' }}>
+                                  本日 {currentReport.totalArticles} 件の記事を確認しました。
+                                  （翻訳済み: {currentReport.translatedArticles}件、未翻訳: {isDailyReport ? (currentReport as any).untranslatedArticles : (currentReport.totalArticles - currentReport.translatedArticles)}件）
+                                </div>
+                                
+                                <div style={{ marginBottom: '8px' }}>
+                                  📋 主要記事:
+                                </div>
+                                
+                                {(currentReport as any).articles.slice(0, 5).map((article: NewsArticle, index: number) => (
+                                  <div key={index} style={{ 
+                                    marginBottom: '12px',
+                                    paddingLeft: '16px',
+                                    borderLeft: '3px solid #e8e8e8'
+                                  }}>
+                                    <div style={{ marginBottom: '4px' }}>
+                                      {article.isTranslated ? article.translatedTitle : article.title}
+                                    </div>
+                                    <div style={{ 
+                                      fontSize: '14px', 
+                                      color: '#616061',
+                                      marginBottom: '4px'
+                                    }}>
+                                      {article.isTranslated ? article.translatedContent : article.content}
+                                    </div>
+                                    <div style={{ 
+                                      fontSize: '13px', 
+                                      color: '#616061'
+                                    }}>
+                                      重要度: {article.importance}/5 | {article.category} | {article.isTranslated ? '翻訳済み' : '未翻訳'}
+                                    </div>
+                                  </div>
+                                ))}
+                                
+                                {(currentReport as any).articles.length > 5 && (
+                                  <div style={{ 
+                                    fontSize: '14px', 
+                                    color: '#616061', 
+                                    fontStyle: 'italic'
+                                  }}>
+                                    ...他 {(currentReport as any).articles.length - 5} 件
+                                  </div>
                                 )}
                               </div>
-                              <div className="text-muted small">
-                                カテゴリ: {article.category} | 重要度: {article.importance}/5
+                            ) : (
+                              <div style={{ 
+                                fontSize: '14px', 
+                                color: '#616061', 
+                                fontStyle: 'italic'
+                              }}>
+                                本日の記事はありません。
                               </div>
-                              <div className="text-muted small">
-                                URL: <a href={article.url} target="_blank" rel="noopener noreferrer">{article.url}</a>
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <div style={{ marginBottom: '12px' }}>
+                              📊 週次戦略レポート - {selectedDate}週
+                            </div>
+                            
+                            {/* 競合の動きサマリ */}
+                            <div style={{ marginBottom: '16px' }}>
+                              <div style={{ marginBottom: '8px' }}>
+                                🏢 競合の動きサマリ
                               </div>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : (
-                      <div className="text-muted">該当日の記事はありません。</div>
-                    )}
-                  </div>
-                ) : (
-                  <div>
-                    <div className="mb-3">
-                      <strong>📊 週次戦略レポート - {selectedDate}週</strong>
-                    </div>
-                    
-                    {/* 競合の動き - 全体サマリ */}
-                    <div className="mb-4">
-                      <h6 className="text-primary">🏢 競合の動き - 全体サマリ</h6>
-                      <div className="row mb-3">
-                        <div className="col-md-3">
-                          <div className="card bg-light">
-                            <div className="card-body text-center p-2">
-                              <h6 className="card-title mb-1">総記事数</h6>
-                              <h4 className="text-primary mb-0">{(currentReport as any).totalCompetitorArticles}</h4>
+                              <div style={{ 
+                                paddingLeft: '16px',
+                                borderLeft: '3px solid #e8e8e8'
+                              }}>
+                                {(currentReport as any).competitorSummary}
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="card bg-light">
-                            <div className="card-body text-center p-2">
-                              <h6 className="card-title mb-1">高重要度</h6>
-                              <h4 className="text-danger mb-0">{(currentReport as any).highImportanceArticles}</h4>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="card bg-light">
-                            <div className="card-body text-center p-2">
-                              <h6 className="card-title mb-1">平均重要度</h6>
-                              <h4 className="text-warning mb-0">{(currentReport as any).averageImportance}</h4>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="card bg-light">
-                            <div className="card-body text-center p-2">
-                              <h6 className="card-title mb-1">翻訳率</h6>
-                              <h4 className="text-success mb-0">
-                                {currentReport.totalArticles > 0 
-                                  ? Math.round((currentReport.translatedArticles / currentReport.totalArticles) * 100)
-                                  : 0}%
-                              </h4>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
 
-                    {/* 各社ごとの動きサマリ */}
-                    <div className="mb-4">
-                      <h6 className="text-primary">🏢 各社ごとの動きサマリ</h6>
-                      {(currentReport as any).competitorAnalysis.length > 0 ? (
-                        <div className="table-responsive">
-                          <table className="table table-sm table-striped">
-                            <thead>
-                              <tr>
-                                <th>企業</th>
-                                <th>記事数</th>
-                                <th>翻訳済み</th>
-                                <th>高重要度</th>
-                                <th>主要記事</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(currentReport as any).competitorAnalysis.map((company: any, index: number) => (
-                                <tr key={index}>
-                                  <td>
-                                    <strong>{company.companyName}</strong>
-                                  </td>
-                                  <td>
-                                    <span className="badge bg-primary">{company.totalArticles}</span>
-                                  </td>
-                                  <td>
-                                    <span className="badge bg-success">{company.translatedArticles}</span>
-                                  </td>
-                                  <td>
-                                    <span className="badge bg-danger">{company.highImportanceArticles}</span>
-                                  </td>
-                                  <td>
-                                    {company.articles.slice(0, 2).map((article: NewsArticle, idx: number) => (
-                                      <div key={idx} className="small">
-                                        {article.isTranslated ? article.translatedTitle : article.title}
-                                        <span className="badge bg-secondary ms-1">{article.importance}/5</span>
+                            {/* 各社の動きサマリ */}
+                            <div style={{ marginBottom: '16px' }}>
+                              <div style={{ marginBottom: '8px' }}>
+                                🏢 各社の動きサマリ
+                              </div>
+                              {(currentReport as any).companySummaries.length > 0 ? (
+                                <div>
+                                  {(currentReport as any).companySummaries.map((company: any, index: number) => (
+                                    <div key={index} style={{ 
+                                      marginBottom: '8px',
+                                      paddingLeft: '16px',
+                                      borderLeft: '3px solid #e8e8e8'
+                                    }}>
+                                      <div style={{ marginBottom: '4px' }}>
+                                        {company.companyName}
                                       </div>
-                                    ))}
-                                    {company.articles.length > 2 && (
-                                      <div className="small text-muted">...他{company.articles.length - 2}件</div>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="text-muted">該当週の競合記事はありません。</div>
-                      )}
-                    </div>
-
-                    {/* 自社が取るべき動き */}
-                    <div className="mb-4">
-                      <h6 className="text-success">🎯 自社が取るべき動き</h6>
-                      {(currentReport as any).strategicRecommendations.length > 0 ? (
-                        <div className="row">
-                          {(currentReport as any).strategicRecommendations.map((rec: any, index: number) => (
-                            <div key={index} className="col-md-6 mb-3">
-                              <div className={`card ${
-                                rec.type === 'urgent' ? 'border-danger' :
-                                rec.type === 'competitive' ? 'border-warning' :
-                                rec.type === 'market' ? 'border-info' :
-                                'border-secondary'
-                              }`}>
-                                <div className="card-body p-3">
-                                  <h6 className={`card-title ${
-                                    rec.type === 'urgent' ? 'text-danger' :
-                                    rec.type === 'competitive' ? 'text-warning' :
-                                    rec.type === 'market' ? 'text-info' :
-                                    'text-secondary'
-                                  }`}>
-                                    {rec.type === 'urgent' ? '🚨' :
-                                     rec.type === 'competitive' ? '⚔️' :
-                                     rec.type === 'market' ? '📈' :
-                                     '💡'} {rec.title}
-                                  </h6>
-                                  <p className="card-text small mb-0">{rec.description}</p>
+                                      <div style={{ 
+                                        fontSize: '14px', 
+                                        color: '#616061'
+                                      }}>
+                                        {company.summary}
+                                      </div>
+                                    </div>
+                                  ))}
                                 </div>
+                              ) : (
+                                <div style={{ 
+                                  fontSize: '14px', 
+                                  color: '#616061', 
+                                  fontStyle: 'italic',
+                                  paddingLeft: '16px',
+                                  borderLeft: '3px solid #e8e8e8'
+                                }}>
+                                  該当週の競合記事はありません。
+                                </div>
+                              )}
+                            </div>
+
+                            {/* 自社が取るべき動き */}
+                            <div style={{ marginBottom: '16px' }}>
+                              <div style={{ marginBottom: '8px' }}>
+                                🎯 自社が取るべき動き
+                              </div>
+                              <div style={{ 
+                                paddingLeft: '16px',
+                                borderLeft: '3px solid #e8e8e8'
+                              }}>
+                                {(currentReport as any).strategicAction}
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-muted">今週は特別な推奨事項はありません。</div>
-                      )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                )}
+                </div>
               </div>
             </div>
           </div>
