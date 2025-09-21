@@ -8,7 +8,7 @@
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:report": "playwright show-report",
-    "dev": "echo 'Starting development server...' && sleep 5",
+    "dev": "node server.js",
     "install:browsers": "playwright install"
   },
   "devDependencies": {

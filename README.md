@@ -38,10 +38,11 @@ Reddit        Functions   システム側設定      日本語統一配信
 ```
 
 ### 技術スタック
-- **バックエンド**: Google Cloud Functions
+- **バックエンド**: Google Cloud Functions + Node.js + TypeScript
 - **データベース**: Firestore
 - **LLM自動統合処理**: OpenAI GPT-4 API (システム側設定による自動処理)
 - **配信**: Slack API
+- **フロントエンド**: HTML + JavaScript（将来SPAフレームワークに移行予定）
 - **ストレージ**: Google Cloud Storage
 - **監視**: Cloud Logging
 - **セキュリティ**: SecretManager（API キー管理）
@@ -97,29 +98,73 @@ Reddit        Functions   システム側設定      日本語統一配信
 
 ## 開発・運用
 
+## 環境構築と起動
+
+### 必須環境変数
+バックエンド (`apps/backend/.env`) に以下を設定してください：
+
+```
+SLACK_BOT_TOKEN=...
+OPENAI_API_KEY=...
+GOOGLE_CLOUD_PROJECT=...
+FIRESTORE_EMULATOR_HOST=localhost:8085   # エミュレータ利用時のみ
+```
+
+いずれかが欠けると起動時に例外終了します。
+
+### 起動手順
+
+1. **バックエンド起動（ローカル開発）**
+   ```bash
+   cd apps/backend && npm install && npm run dev
+   ```
+   デフォルトで `http://localhost:8080` で起動
+
+2. **バックエンド起動（Firebase Functions エミュレータ）**
+   ```bash
+   cd apps/backend && npm run serve
+   ```
+   Firebase Functions エミュレータで起動
+
+3. **フロントエンド起動**
+   ```bash
+   npm install  # 未実施なら
+   npm run dev  # 既存サーバー
+   ```
+   `http://localhost:3001` を開きます
+
+### 動作確認の要点
+
+- 管理画面の Slack 設定で実ワークスペースのチャンネルが一覧表示されることを確認し、保存すると日次／週次テストボタンが有効になります
+- 「テスト実行」で情報収集／レポート配信を試すと Slack に実投稿され、Slack 側のチャンネルでメッセージを確認できます。失敗時は API が 500 で落ち、delivery_logs に status: failed が残ります
+- Slack モックビュー `http://localhost:3001/slack-mock/#<チャンネル名>` では最新の記事一覧のみを参照します（実際の Slack メッセージはモックでは表示されません）
+
 ### 開発環境
 - Node.js 18.x
 - TypeScript
-- Serverless Framework / Firebase CLI
-- GitHub Actions (CI/CD)
-
-### デプロイメント
 - Google Cloud Functions
-- ステージング・本番環境の分離
-- 自動デプロイパイプライン
+- Firebase CLI
+- Playwright (E2Eテスト)
 
 ### 監視・アラート
 - システム稼働率: 99.5%以上
 - 情報収集精度: 95%以上
 - 配信成功率: 99%以上
 - エラー時特定ユーザーへのメンション通知
-- ベンダーによる運用・メンテナンス
+
+## 残作業・次ステップ
+
+1. **Slack Bot / OpenAI / Firestore 本番クレデンシャルの共有と Secret 管理フローの確定**
+2. **Playwright シナリオを実 API 前提に更新し、E2E を再整備**
+3. **GitHub Actions 等で lint/test/deploy パイプラインを整備し、Firestore インデックスも含めた IaC を検討**
+4. **本番環境へのデプロイ手順策定と運用監視（Cloud Logging, Alerts）の設定**
 
 ## 今後の拡張予定
 
 ### Phase 2
 - より詳細な分析機能
 - カスタムダッシュボード
+- SPAフレームワークへの移行（React/Vue等）
 
 ### 運用規模
 - **企業数**: 10社程度
