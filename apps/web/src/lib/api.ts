@@ -176,35 +176,6 @@ export async function runCollection(): Promise<ApiResponse<{ message: string }>>
   }
 }
 
-// 日次レポート送信
-export async function sendDailyReport(): Promise<ApiResponse<{ message: string }>> {
-  try {
-    const response = await fetch(`${API_BASE}/sendDailyReport`, {
-      method: 'POST',
-    });
-    return await response.json();
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  }
-}
-
-// 週次レポート送信
-export async function sendWeeklyReport(): Promise<ApiResponse<{ message: string }>> {
-  try {
-    const response = await fetch(`${API_BASE}/sendWeeklyReport`, {
-      method: 'POST',
-    });
-    return await response.json();
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  }
-}
 
 // 配信対象記事の翻訳処理
 export async function translateDeliveryTargetNews(): Promise<ApiResponse<{ message: string }>> {
@@ -241,6 +212,44 @@ export async function cleanupNews(): Promise<ApiResponse<{ message: string }>> {
   try {
     const response = await fetch(`${API_BASE}/cleanupNews`, {
       method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 日次レポート配信
+export async function deliverDailyReport(date?: string): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/deliverDailyReport`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ date }),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 週次レポート配信
+export async function deliverWeeklyReport(weekStart?: string): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/deliverWeeklyReport`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ weekStart }),
     });
     return await response.json();
   } catch (error) {

@@ -15,6 +15,7 @@ const openaiApiKey = defineSecret("openai-api-key");
 const webAppUrl = defineSecret("web-app-url");
 const openaiApiUrl = defineSecret("openai-api-url");
 const googleNewsBaseUrl = defineSecret("google-news-base-url");
+const slackWebhookUrl = defineSecret("slack-webhook-url");
 
 // Firebase Admin SDK を初期化
 initializeApp();
@@ -543,29 +544,6 @@ export const deleteCompany = onRequest({
 });
 
 // 全ニュース記事削除API（テスト用）
-export const clearAllNews = onRequest({ 
-  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl]
-}, async (req, res) => {
-  try {
-    const newsSnapshot = await db.collection("news").get();
-    
-    const batch = db.batch();
-    newsSnapshot.docs.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-    
-    await batch.commit();
-
-    res.json({
-      success: true,
-      message: `${newsSnapshot.docs.length}件の記事が削除されました`
-    });
-  } catch (error) {
-    logger.error("Error clearing news:", error);
-    res.status(500).json({ success: false, error: "Failed to clear news" });
-  }
-});
 
 // 記事クリーンナップAPI（完全削除・デバッグ用）
 export const cleanupNews = onRequest({ 
@@ -704,7 +682,7 @@ export const translateDeliveryTargetNews = onRequest({
 // 配信処理API（Slack送信）
 export const deliverNews = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl]
+  secrets: [webAppUrl, slackWebhookUrl]
 }, async (req, res) => {
   try {
     logger.info("Starting news delivery process...");
@@ -728,17 +706,68 @@ export const deliverNews = onRequest({
       const article = doc.data() as NewsArticle;
       
       try {
-        // Slack送信処理（TODO: 実際のSlack API実装）
+        // Slack送信処理
         const slackMessage = {
-          title: article.translatedTitle || article.title,
-          content: article.translatedContent || article.translatedSummary || article.content,
-          url: article.url,
-          category: article.category,
-          acquisitionDate: article.informationAcquisitionDate
+          text: `📰 ${article.translatedTitle || article.title}`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*${article.translatedTitle || article.title}*`
+              }
+            },
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `${article.translatedContent || article.translatedSummary || article.content}`
+              }
+            },
+            {
+              type: "context",
+              elements: [
+                {
+                  type: "mrkdwn",
+                  text: `カテゴリ: ${article.category} | 重要度: ${article.importance}/5 | ${article.isTranslated ? '翻訳済み' : '未翻訳'}`
+                }
+              ]
+            },
+            {
+              type: "actions",
+              elements: [
+                {
+                  type: "button",
+                  text: {
+                    type: "plain_text",
+                    text: "詳細を見る"
+                  },
+                  url: article.url
+                }
+              ]
+            }
+          ]
         };
 
-        // TODO: 実際のSlack API呼び出し
-        logger.info(`Delivering to Slack: ${slackMessage.title}`);
+        // Slack Webhook API呼び出し
+        try {
+          const response = await fetch(slackWebhookUrl.value(), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(slackMessage)
+          });
+
+          if (!response.ok) {
+            throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
+          }
+
+          logger.info(`Successfully delivered to Slack: ${slackMessage.text}`);
+        } catch (slackError) {
+          logger.error(`Slack delivery failed: ${slackError}`);
+          throw slackError;
+        }
 
         // 配信ステータスを更新
         await doc.ref.update({
@@ -874,35 +903,6 @@ export const runCollection = onRequest({
   }
 });
 
-// 日次レポート送信API
-export const sendDailyReport = onRequest({ 
-  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl]
-}, async (req, res) => {
-  try {
-    logger.info("日次レポートが送信されました (モック)");
-    // ここに実際の日次レポート送信ロジックを実装
-    res.json({ success: true, message: "日次レポートが送信されました (モック)" });
-  } catch (error) {
-    logger.error("Error sending daily report:", error);
-    res.status(500).json({ success: false, error: "Failed to send daily report" });
-  }
-});
-
-// 週次レポート送信API
-export const sendWeeklyReport = onRequest({ 
-  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl]
-}, async (req, res) => {
-  try {
-    logger.info("週次レポートが送信されました (モック)");
-    // ここに実際の週次レポート送信ロジックを実装
-    res.json({ success: true, message: "週次レポートが送信されました (モック)" });
-  } catch (error) {
-    logger.error("Error sending weekly report:", error);
-    res.status(500).json({ success: false, error: "Failed to send weekly report" });
-  }
-});
 
 // 実データ収集API（テスト用）
 export const collectRealData = onRequest({ 
@@ -1013,3 +1013,327 @@ export const scheduledCollection = onSchedule(config.schedule.collectionTime, as
     logger.error("定期情報収集中にエラーが発生しました:", error);
   }
 });
+
+// 日次レポート配信API
+export const deliverDailyReport = onRequest({ 
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+  secrets: [webAppUrl, slackWebhookUrl]
+}, async (req, res) => {
+  try {
+    const { date } = req.body;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    
+    logger.info(`Starting daily report delivery for ${targetDate}...`);
+
+    // 指定日の記事を取得
+    const startOfDay = new Date(targetDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const newsSnapshot = await db.collection("news").get();
+    const dailyNews = newsSnapshot.docs.filter(doc => {
+      const data = doc.data() as NewsArticle;
+      const articleDate = new Date(data.publishedAt);
+      return articleDate >= startOfDay && articleDate <= endOfDay;
+    }).map(doc => doc.data() as NewsArticle);
+
+    const translatedNews = dailyNews.filter(article => article.isTranslated);
+    const untranslatedNews = dailyNews.filter(article => !article.isTranslated);
+
+    // 日次レポートメッセージを生成
+    const slackMessage = {
+      text: `📰 日次ニュースレポート - ${targetDate}`,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `📰 日次ニュースレポート - ${targetDate}`
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `本日 ${dailyNews.length} 件の記事を確認しました。\n（翻訳済み: ${translatedNews.length}件、未翻訳: ${untranslatedNews.length}件）`
+          }
+        }
+      ]
+    };
+
+    // 主要記事を追加（最大5件）
+    if (dailyNews.length > 0) {
+      slackMessage.blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*📋 主要記事:*"
+        }
+      });
+
+      dailyNews.slice(0, 5).forEach(article => {
+        slackMessage.blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*${article.isTranslated ? article.translatedTitle : article.title}*\n${article.isTranslated ? article.translatedContent : article.content}`
+          }
+        });
+        slackMessage.blocks.push({
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `重要度: ${article.importance}/5 | ${article.category} | ${article.isTranslated ? '翻訳済み' : '未翻訳'}`
+            }
+          ]
+        } as any);
+      });
+
+      if (dailyNews.length > 5) {
+        slackMessage.blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `...他 ${dailyNews.length - 5} 件`
+          }
+        });
+      }
+    } else {
+      slackMessage.blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "本日の記事はありません。"
+        }
+      });
+    }
+
+    // Slack送信
+    const response = await fetch(slackWebhookUrl.value(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(slackMessage)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
+    }
+
+    logger.info(`Daily report delivered successfully for ${targetDate}`);
+
+    res.json({
+      success: true,
+      message: `日次レポートを配信しました（${dailyNews.length}件の記事）`
+    });
+
+  } catch (error) {
+    logger.error("Error in daily report delivery:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to deliver daily report" 
+    });
+  }
+});
+
+// 週次レポート配信API
+export const deliverWeeklyReport = onRequest({ 
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+  secrets: [webAppUrl, slackWebhookUrl]
+}, async (req, res) => {
+  try {
+    const { weekStart } = req.body;
+    const targetWeekStart = weekStart || new Date().toISOString().split('T')[0];
+    
+    logger.info(`Starting weekly report delivery for week starting ${targetWeekStart}...`);
+
+    // 指定週の記事を取得
+    const startOfWeek = new Date(targetWeekStart);
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+
+    const newsSnapshot = await db.collection("news").get();
+    const weeklyNews = newsSnapshot.docs.filter(doc => {
+      const data = doc.data() as NewsArticle;
+      const articleDate = new Date(data.publishedAt);
+      return articleDate >= startOfWeek && articleDate <= endOfWeek;
+    }).map(doc => doc.data() as NewsArticle);
+
+    // const translatedNews = weeklyNews.filter(article => article.isTranslated);
+
+    // 企業別に記事をグループ化
+    const newsByCompany = weeklyNews.reduce((acc, article) => {
+      const companyId = article.companyId;
+      if (!acc[companyId]) acc[companyId] = [];
+      acc[companyId].push(article);
+      return acc;
+    }, {} as Record<string, NewsArticle[]>);
+
+    // 競合の動きサマリ生成
+    const competitorSummary = generateCompetitorSummary(weeklyNews);
+    
+    // 各社の動きサマリ生成
+    const companySummaries = Object.entries(newsByCompany).map(([companyId, articles]) => {
+      const companyName = companyId === 'TEST_RANDOM' ? 'テスト用ランダム記事' : `企業ID: ${companyId}`;
+      return {
+        companyId,
+        companyName,
+        summary: generateCompanySummary(articles)
+      };
+    });
+
+    // 自社が取るべき動き生成
+    const strategicAction = generateStrategicAction(weeklyNews, companySummaries);
+
+    // 週次レポートメッセージを生成
+    const slackMessage = {
+      text: `📊 週次戦略レポート - ${targetWeekStart}週`,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `📊 週次戦略レポート - ${targetWeekStart}週`
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*🏢 競合の動きサマリ*\n${competitorSummary}`
+          }
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*🏢 各社の動きサマリ*`
+          }
+        }
+      ]
+    };
+
+    // 各社の動きサマリを追加
+    if (companySummaries.length > 0) {
+      companySummaries.forEach(company => {
+        slackMessage.blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*${company.companyName}*\n${company.summary}`
+          }
+        });
+      });
+    } else {
+      slackMessage.blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "該当週の競合記事はありません。"
+        }
+      });
+    }
+
+    // 自社が取るべき動きを追加
+    slackMessage.blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*🎯 自社が取るべき動き*\n${strategicAction}`
+      }
+    });
+
+    // Slack送信
+    const response = await fetch(slackWebhookUrl.value(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(slackMessage)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
+    }
+
+    logger.info(`Weekly report delivered successfully for week starting ${targetWeekStart}`);
+
+    res.json({
+      success: true,
+      message: `週次レポートを配信しました（${weeklyNews.length}件の記事）`
+    });
+
+  } catch (error) {
+    logger.error("Error in weekly report delivery:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to deliver weekly report" 
+    });
+  }
+});
+
+// ヘルパー関数
+function generateCompetitorSummary(weeklyNews: NewsArticle[]): string {
+  if (weeklyNews.length === 0) {
+    return "今週は競合の動きに関する記事はありませんでした。";
+  }
+
+  const categories = weeklyNews.reduce((acc, article) => {
+    acc[article.category] = (acc[article.category] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const topCategories = Object.entries(categories)
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 3)
+    .map(([category, count]) => `${category}(${count}件)`)
+    .join('、');
+
+  const highImportanceCount = weeklyNews.filter(a => a.importance >= 4).length;
+  const highImportanceText = highImportanceCount > 0 ? `特に重要度の高い記事が${highImportanceCount}件` : '';
+
+  return `今週は競合から${weeklyNews.length}件の記事が確認されました。主な分野は${topCategories}です。${highImportanceText}。市場では技術革新や新サービス発表が活発で、競合各社が積極的な動きを見せています。`;
+}
+
+function generateCompanySummary(articles: NewsArticle[]): string {
+  if (articles.length === 0) {
+    return "今週の動きはありませんでした。";
+  }
+
+  const translatedArticles = articles.filter(a => a.isTranslated);
+  const mainTopics = articles.slice(0, 2).map(a => 
+    a.isTranslated ? a.translatedTitle : a.title
+  ).join('、');
+
+  return `${articles.length}件の記事を確認。主な内容は「${mainTopics}」など。${translatedArticles.length}件が翻訳済み。`;
+}
+
+function generateStrategicAction(weeklyNews: NewsArticle[], companySummaries: any[]): string {
+  if (weeklyNews.length === 0) {
+    return "今週は競合の動きが少なく、現状維持を継続することを推奨します。市場の動向を引き続き監視し、次週以降の動きに備えてください。";
+  }
+
+  const highImportanceArticles = weeklyNews.filter(a => a.importance >= 4);
+  const activeCompanies = companySummaries.filter(c => c.summary !== "今週の動きはありませんでした。");
+  
+  let action = "今週の競合動向を踏まえ、以下の対応を推奨します：";
+  
+  if (highImportanceArticles.length > 0) {
+    action += ` 高重要度記事${highImportanceArticles.length}件について詳細分析を実施し、`;
+  }
+  
+  if (activeCompanies.length > 0) {
+    action += ` 特に活発な${activeCompanies.length}社の動向を重点監視し、`;
+  }
+  
+  action += " 自社の戦略的ポジションを再評価することをお勧めします。市場の変化に迅速に対応できる体制を整備してください。";
+
+  return action;
+}

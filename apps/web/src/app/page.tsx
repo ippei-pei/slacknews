@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getCompanies, addCompany, updateCompany, deleteCompany, getNews, runCollection, sendDailyReport, sendWeeklyReport, translateDeliveryTargetNews, deliverNews, cleanupNews, Company, NewsArticle } from '@/lib/api';
+import { getCompanies, addCompany, updateCompany, deleteCompany, getNews, runCollection, translateDeliveryTargetNews, deliverNews, cleanupNews, deliverDailyReport, deliverWeeklyReport, Company, NewsArticle } from '@/lib/api';
 
 export default function Home() {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -148,6 +148,15 @@ export default function Home() {
   const handleCleanupNews = async () => {
     setShowCleanupConfirm(false);
     await handleAction('cleanup', cleanupNews);
+  };
+
+  // Slack配信テスト関数
+  const handleSlackDailyTest = async () => {
+    await handleAction('slack-daily', () => deliverDailyReport());
+  };
+
+  const handleSlackWeeklyTest = async () => {
+    await handleAction('slack-weekly', () => deliverWeeklyReport());
   };
 
   // 週の開始日を取得（月曜日を週の開始とする）
@@ -416,7 +425,7 @@ export default function Home() {
                   <button 
                     className="btn btn-outline-primary"
                     disabled={actionLoading === 'daily'}
-                    onClick={() => handleAction('daily', sendDailyReport)}
+                    onClick={() => handleAction('daily', () => deliverDailyReport())}
                   >
                     {actionLoading === 'daily' ? (
                       <>
@@ -430,7 +439,7 @@ export default function Home() {
                   <button 
                     className="btn btn-outline-secondary"
                     disabled={actionLoading === 'weekly'}
-                    onClick={() => handleAction('weekly', sendWeeklyReport)}
+                    onClick={() => handleAction('weekly', () => deliverWeeklyReport())}
                   >
                     {actionLoading === 'weekly' ? (
                       <>
@@ -481,6 +490,36 @@ export default function Home() {
                       </>
                     ) : (
                       '記事クリーンナップ（全削除）'
+                    )}
+                  </button>
+                  <hr />
+                  <h6 className="text-muted mb-2">Slack配信テスト</h6>
+                  <button 
+                    className="btn btn-outline-info"
+                    disabled={actionLoading === 'slack-daily'}
+                    onClick={handleSlackDailyTest}
+                  >
+                    {actionLoading === 'slack-daily' ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                        配信中...
+                      </>
+                    ) : (
+                      '📱 日次レポート配信テスト'
+                    )}
+                  </button>
+                  <button 
+                    className="btn btn-outline-info"
+                    disabled={actionLoading === 'slack-weekly'}
+                    onClick={handleSlackWeeklyTest}
+                  >
+                    {actionLoading === 'slack-weekly' ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                        配信中...
+                      </>
+                    ) : (
+                      '📱 週次レポート配信テスト'
                     )}
                   </button>
                 </div>
