@@ -1,11 +1,47 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.scheduledCollection = exports.sendWeeklyReport = exports.sendDailyReport = exports.runCollection = exports.getNews = exports.deliverNews = exports.translateDeliveryTargetNews = exports.clearAllNews = exports.deleteCompany = exports.addCompany = exports.getCompanies = void 0;
+exports.scheduledCollection = exports.collectRealData = exports.sendWeeklyReport = exports.sendDailyReport = exports.runCollection = exports.getNews = exports.deliverNews = exports.translateDeliveryTargetNews = exports.clearAllNews = exports.deleteCompany = exports.addCompany = exports.getCompanies = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const firebase_functions_1 = require("firebase-functions");
+const dotenv = __importStar(require("dotenv"));
+// .envファイルを読み込み
+dotenv.config({ path: "../../.env" });
 // Firebase Admin SDK を初期化
 (0, app_1.initializeApp)();
 const db = (0, firestore_1.getFirestore)();
@@ -122,10 +158,10 @@ function stripHtmlTags(html) {
 // gpt-5 nanoを使用した日本語翻訳関数
 async function translateToJapanese(text) {
     var _a, _b, _c;
-    // OpenAI APIの設定
+    // .envファイルからAPIキーを取得
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     if (!OPENAI_API_KEY) {
-        throw new Error('OpenAI API key is required for translation. Please set OPENAI_API_KEY environment variable.');
+        throw new Error('OpenAI API key is required for translation. Please set OPENAI_API_KEY in .env file.');
     }
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -159,6 +195,91 @@ async function translateToJapanese(text) {
     }
     return translatedText;
 }
+// Google Newsから当日記事を取得する関数
+async function collectTodaysGoogleNews(company, count = 20) {
+    try {
+        firebase_functions_1.logger.info(`Collecting today's Google News for ${company.name}`);
+        // 当日の日付を取得
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD形式
+        // 様々なキーワードでGoogle Newsを検索（当日の記事のみ）
+        const keywords = [
+            'technology', 'AI', 'artificial intelligence', 'startup', 'innovation',
+            'software', 'hardware', 'mobile', 'internet', 'cybersecurity',
+            'blockchain', 'cryptocurrency', 'fintech', 'ecommerce', 'social media',
+            'tech news', 'breaking news', 'latest technology', 'digital transformation',
+            'cloud computing', 'machine learning', 'data science', 'programming'
+        ];
+        let allArticles = [];
+        // 複数のキーワードで検索して記事を集める
+        for (let i = 0; i < Math.min(keywords.length, 8); i++) {
+            const keyword = keywords[i];
+            const googleNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en&when:1d`;
+            firebase_functions_1.logger.info(`Searching with keyword: ${keyword}`);
+            try {
+                const response = await fetch(googleNewsUrl);
+                const xmlText = await response.text();
+                const items = parseRSSFeed(xmlText);
+                firebase_functions_1.logger.info(`Found ${items.length} articles for keyword: ${keyword}`);
+                // 当日の記事のみをフィルタリング
+                const todayItems = items.filter(item => {
+                    if (!item.pubDate)
+                        return false;
+                    const itemDate = new Date(item.pubDate);
+                    const itemDateStr = itemDate.toISOString().split('T')[0];
+                    return itemDateStr === todayStr;
+                });
+                firebase_functions_1.logger.info(`Found ${todayItems.length} today's articles for keyword: ${keyword}`);
+                allArticles = allArticles.concat(todayItems);
+                // 少し待機してAPI制限を避ける
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            catch (error) {
+                firebase_functions_1.logger.error(`Error fetching articles for keyword ${keyword}:`, error);
+            }
+        }
+        // 重複を除去（URLベース）
+        const uniqueArticles = allArticles.filter((article, index, self) => index === self.findIndex(a => a.link === article.link));
+        firebase_functions_1.logger.info(`Total unique today's articles found: ${uniqueArticles.length}`);
+        // ランダムに記事を選択（最大count件）
+        const shuffledItems = uniqueArticles.sort(() => 0.5 - Math.random());
+        const selectedItems = shuffledItems.slice(0, count);
+        firebase_functions_1.logger.info(`Selected ${selectedItems.length} articles for ${company.name}`);
+        for (const item of selectedItems) {
+            const newsData = {
+                companyId: company.id,
+                title: stripHtmlTags(item.title || 'No title'),
+                content: stripHtmlTags(item.description || item.content || ''),
+                url: item.link || '',
+                publishedAt: new Date(item.pubDate || Date.now()),
+                importance: Math.floor(Math.random() * 5) + 1, // ランダム重要度
+                category: 'Google News Today',
+                summary: stripHtmlTags(item.description || item.content || ''),
+                isDeliveryTarget: true,
+                isTranslated: false,
+                informationAcquisitionDate: new Date(),
+                deliveryStatus: 'pending',
+                createdAt: new Date()
+            };
+            // 重複チェック
+            const existingNews = await db.collection("news")
+                .where("companyId", "==", company.id)
+                .where("url", "==", newsData.url)
+                .limit(1)
+                .get();
+            if (existingNews.empty) {
+                await db.collection("news").add(newsData);
+                firebase_functions_1.logger.info(`Added today's news: ${item.title}`);
+            }
+            else {
+                firebase_functions_1.logger.info(`Skipped duplicate today's news: ${item.title}`);
+            }
+        }
+    }
+    catch (error) {
+        firebase_functions_1.logger.error(`Error collecting today's Google News for ${company.name}:`, error);
+    }
+}
 // 簡易RSS解析関数
 function parseRSSFeed(xmlText) {
     const items = [];
@@ -184,7 +305,7 @@ function parseRSSFeed(xmlText) {
 }
 // 企業一覧取得API
 exports.getCompanies = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         // インデックス構築中は簡素なクエリを使用
@@ -206,7 +327,7 @@ exports.getCompanies = (0, https_1.onRequest)({
 });
 // 企業追加API
 exports.addCompany = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         const { name, url, rssUrl, redditUrl, priority } = req.body;
@@ -240,7 +361,7 @@ exports.addCompany = (0, https_1.onRequest)({
 });
 // 企業削除API
 exports.deleteCompany = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         const { companyId } = req.body;
@@ -264,7 +385,7 @@ exports.deleteCompany = (0, https_1.onRequest)({
 });
 // 全ニュース記事削除API（テスト用）
 exports.clearAllNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         const newsSnapshot = await db.collection("news").get();
@@ -285,7 +406,7 @@ exports.clearAllNews = (0, https_1.onRequest)({
 });
 // 配信対象記事の翻訳処理API
 exports.translateDeliveryTargetNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting translation process for delivery target news...");
@@ -336,7 +457,7 @@ exports.translateDeliveryTargetNews = (0, https_1.onRequest)({
 });
 // 配信処理API（Slack送信）
 exports.deliverNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting news delivery process...");
@@ -392,7 +513,7 @@ exports.deliverNews = (0, https_1.onRequest)({
 });
 // ニュース記事一覧取得API（配信対象の記事のみ）
 exports.getNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         const { companyId, limit = 10 } = req.query;
@@ -424,7 +545,7 @@ exports.getNews = (0, https_1.onRequest)({
 });
 // 情報収集実行API
 exports.runCollection = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting news collection process...");
@@ -451,6 +572,9 @@ exports.runCollection = (0, https_1.onRequest)({
                     await collectRedditFeed(company);
                     collectedCount++;
                 }
+                // 実データ：当日のGoogle News記事を収集
+                await collectTodaysGoogleNews(company, 20);
+                collectedCount++;
             }
             catch (error) {
                 firebase_functions_1.logger.error(`Error collecting news for ${company.name}:`, error);
@@ -471,7 +595,7 @@ exports.runCollection = (0, https_1.onRequest)({
 });
 // 日次レポート送信API
 exports.sendDailyReport = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("日次レポートが送信されました (モック)");
@@ -485,7 +609,7 @@ exports.sendDailyReport = (0, https_1.onRequest)({
 });
 // 週次レポート送信API
 exports.sendWeeklyReport = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("週次レポートが送信されました (モック)");
@@ -495,6 +619,56 @@ exports.sendWeeklyReport = (0, https_1.onRequest)({
     catch (error) {
         firebase_functions_1.logger.error("Error sending weekly report:", error);
         res.status(500).json({ success: false, error: "Failed to send weekly report" });
+    }
+});
+// 実データ収集API（テスト用）
+exports.collectRealData = (0, https_1.onRequest)({
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+}, async (req, res) => {
+    try {
+        firebase_functions_1.logger.info("Starting real data collection...");
+        // アクティブな企業を取得
+        const companiesSnapshot = await db.collection("companies")
+            .where("isActive", "==", true)
+            .get();
+        const companies = companiesSnapshot.docs.map(doc => {
+            const data = doc.data();
+            return Object.assign({ id: doc.id }, data);
+        });
+        firebase_functions_1.logger.info(`Found ${companies.length} active companies`);
+        let collectedCount = 0;
+        // 各企業に対して実データを収集
+        for (const company of companies) {
+            try {
+                firebase_functions_1.logger.info(`Collecting real data for ${company.name}...`);
+                // RSSフィードが設定されている場合のみ処理
+                if (company.rssUrl) {
+                    await collectRSSFeed(company);
+                    collectedCount++;
+                }
+                if (company.redditUrl) {
+                    await collectRedditFeed(company);
+                    collectedCount++;
+                }
+                // 当日のGoogle News記事を収集
+                await collectTodaysGoogleNews(company, 20);
+                collectedCount++;
+            }
+            catch (error) {
+                firebase_functions_1.logger.error(`Error collecting real data for ${company.name}:`, error);
+            }
+        }
+        res.json({
+            success: true,
+            message: `${companies.length}社から${collectedCount}件の実データを収集しました`
+        });
+    }
+    catch (error) {
+        firebase_functions_1.logger.error("Error in collectRealData:", error);
+        res.status(500).json({
+            success: false,
+            error: "実データ収集中にエラーが発生しました"
+        });
     }
 });
 // 定期実行される情報収集 (毎日午前9時)
