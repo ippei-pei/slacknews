@@ -33,15 +33,22 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.scheduledCollection = exports.collectRealData = exports.sendWeeklyReport = exports.sendDailyReport = exports.runCollection = exports.getNews = exports.deliverNews = exports.translateDeliveryTargetNews = exports.clearAllNews = exports.deleteCompany = exports.updateCompany = exports.addCompany = exports.getCompanies = void 0;
+exports.scheduledCollection = exports.collectRealData = exports.sendWeeklyReport = exports.sendDailyReport = exports.runCollection = exports.getNews = exports.deliverNews = exports.translateDeliveryTargetNews = exports.cleanupNews = exports.clearAllNews = exports.deleteCompany = exports.updateCompany = exports.addCompany = exports.getCompanies = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const firebase_functions_1 = require("firebase-functions");
+const params_1 = require("firebase-functions/params");
 const dotenv = __importStar(require("dotenv"));
+const config_1 = require("./config");
 // .envファイルを読み込み
 dotenv.config({ path: "../../.env" });
+// Secret Managerからシークレットを定義
+const openaiApiKey = (0, params_1.defineSecret)("openai-api-key");
+const webAppUrl = (0, params_1.defineSecret)("web-app-url");
+const openaiApiUrl = (0, params_1.defineSecret)("openai-api-url");
+const googleNewsBaseUrl = (0, params_1.defineSecret)("google-news-base-url");
 // Firebase Admin SDK を初期化
 (0, app_1.initializeApp)();
 const db = (0, firestore_1.getFirestore)();
@@ -57,7 +64,7 @@ async function collectRSSFeed(company) {
         // 簡易的なRSS解析
         const items = parseRSSFeed(xmlText);
         firebase_functions_1.logger.info(`Parsed ${items.length} items from RSS`);
-        for (const item of items.slice(0, 5)) { // 最新5件のみ
+        for (const item of items.slice(0, config_1.config.test.rssItemLimit)) { // 設定ファイルから取得
             const newsData = {
                 companyId: company.id,
                 title: stripHtmlTags(item.title || 'No title'),
@@ -103,7 +110,7 @@ async function collectRedditFeed(company) {
         const response = await fetch(company.redditUrl);
         const xmlText = await response.text();
         const items = parseRSSFeed(xmlText);
-        for (const item of items.slice(0, 3)) { // 最新3件のみ
+        for (const item of items.slice(0, config_1.config.test.redditItemLimit)) { // 設定ファイルから取得
             const newsData = {
                 companyId: company.id,
                 title: stripHtmlTags(item.title || 'No title'),
@@ -155,22 +162,23 @@ function stripHtmlTags(html) {
         .replace(/\s+/g, ' ') // 複数の空白を1つに
         .trim();
 }
-// gpt-4o-miniを使用した日本語翻訳関数
+// 設定ファイルとSecret Managerを使用した日本語翻訳関数
 async function translateToJapanese(text) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c;
     try {
         firebase_functions_1.logger.info('Starting translation process...');
-        // Firebase Functionsの設定からAPIキーを取得
-        const OPENAI_API_KEY = ((_a = (0, firebase_functions_1.config)().openai) === null || _a === void 0 ? void 0 : _a.api_key) || process.env.OPENAI_API_KEY;
+        // Secret ManagerからAPIキーとURLを取得
+        const OPENAI_API_KEY = openaiApiKey.value();
+        const OPENAI_API_URL = openaiApiUrl.value();
         firebase_functions_1.logger.info(`API Key exists: ${!!OPENAI_API_KEY}`);
         firebase_functions_1.logger.info(`API Key length: ${OPENAI_API_KEY ? OPENAI_API_KEY.length : 0}`);
         firebase_functions_1.logger.info(`API Key prefix: ${OPENAI_API_KEY ? OPENAI_API_KEY.substring(0, 10) + '...' : 'N/A'}`);
         if (!OPENAI_API_KEY) {
-            throw new Error('OpenAI API key is required for translation. Please set openai.api_key in Firebase Functions config.');
+            throw new Error('OpenAI API key is required for translation. Please set openai-api-key secret in Secret Manager.');
         }
-        firebase_functions_1.logger.info(`Translating text: ${text.substring(0, 100)}...`);
+        firebase_functions_1.logger.info(`Translating text: ${text.substring(0, config_1.config.text.maxTitleLength)}...`);
         const requestBody = {
-            model: 'gpt-4o-mini',
+            model: config_1.config.ai.model,
             messages: [
                 {
                     role: 'system',
@@ -181,11 +189,11 @@ async function translateToJapanese(text) {
                     content: `以下のテキストを日本語に翻訳してください:\n\n${text}`
                 }
             ],
-            max_tokens: 1000,
-            temperature: 0.3,
+            max_tokens: config_1.config.ai.maxTokens,
+            temperature: config_1.config.ai.temperature,
         };
         firebase_functions_1.logger.info(`Request body: ${JSON.stringify(requestBody, null, 2)}`);
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const response = await fetch(OPENAI_API_URL, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -202,12 +210,12 @@ async function translateToJapanese(text) {
         }
         const data = await response.json();
         firebase_functions_1.logger.info(`Response data: ${JSON.stringify(data, null, 2)}`);
-        const translatedText = (_d = (_c = (_b = data.choices[0]) === null || _b === void 0 ? void 0 : _b.message) === null || _c === void 0 ? void 0 : _c.content) === null || _d === void 0 ? void 0 : _d.trim();
+        const translatedText = (_c = (_b = (_a = data.choices[0]) === null || _a === void 0 ? void 0 : _a.message) === null || _b === void 0 ? void 0 : _b.content) === null || _c === void 0 ? void 0 : _c.trim();
         if (!translatedText) {
             firebase_functions_1.logger.error('No translation received from OpenAI API');
             throw new Error('No translation received from OpenAI API');
         }
-        firebase_functions_1.logger.info(`Translation successful: ${translatedText.substring(0, 100)}...`);
+        firebase_functions_1.logger.info(`Translation successful: ${translatedText.substring(0, config_1.config.text.maxTitleLength)}...`);
         return translatedText;
     }
     catch (error) {
@@ -217,12 +225,12 @@ async function translateToJapanese(text) {
 }
 // 【テスト用】Google Newsから過去一週間のランダム記事を取得する関数
 // 企業非依存で、テスト目的の記事収集を行う
-async function collectTestRandomGoogleNews(count = 20) {
+async function collectTestRandomGoogleNews(count = config_1.config.test.randomArticleCount) {
     try {
         firebase_functions_1.logger.info(`Collecting ${count} random Google News articles from the past week`);
         // 過去一週間の日付範囲を取得
         const today = new Date();
-        const oneWeekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const oneWeekAgo = new Date(today.getTime() - config_1.config.time.pastWeekDays * 24 * 60 * 60 * 1000);
         const todayStr = today.toISOString().split('T')[0];
         const oneWeekAgoStr = oneWeekAgo.toISOString().split('T')[0];
         firebase_functions_1.logger.info(`Searching for articles from ${oneWeekAgoStr} to ${todayStr}`);
@@ -238,7 +246,8 @@ async function collectTestRandomGoogleNews(count = 20) {
         // 複数のキーワードで検索して記事を集める
         for (let i = 0; i < Math.min(keywords.length, 8); i++) {
             const keyword = keywords[i];
-            const googleNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en&when:7d`;
+            const googleNewsBaseUrlValue = googleNewsBaseUrl.value();
+            const googleNewsUrl = `${googleNewsBaseUrlValue}?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en&when:7d`;
             firebase_functions_1.logger.info(`Searching with keyword: ${keyword}`);
             try {
                 const response = await fetch(googleNewsUrl);
@@ -255,7 +264,7 @@ async function collectTestRandomGoogleNews(count = 20) {
                 firebase_functions_1.logger.info(`Found ${recentItems.length} recent articles for keyword: ${keyword}`);
                 allArticles = allArticles.concat(recentItems);
                 // 少し待機してAPI制限を避ける
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, config_1.config.ai.apiWaitTime));
             }
             catch (error) {
                 firebase_functions_1.logger.error(`Error fetching articles for keyword ${keyword}:`, error);
@@ -271,7 +280,7 @@ async function collectTestRandomGoogleNews(count = 20) {
         // 既存のテスト用ランダム記事をチェックして重複を避ける
         const existingUrls = new Set();
         const existingNewsSnapshot = await db.collection("news")
-            .where("category", "==", "Google News Test Random")
+            .where("category", "==", config_1.config.test.testCategoryName)
             .get();
         existingNewsSnapshot.docs.forEach(doc => {
             const data = doc.data();
@@ -286,13 +295,13 @@ async function collectTestRandomGoogleNews(count = 20) {
                 continue;
             }
             const newsData = {
-                companyId: 'TEST_RANDOM', // テスト用ランダム記事の識別子
+                companyId: config_1.config.test.testCompanyId, // テスト用ランダム記事の識別子
                 title: stripHtmlTags(item.title || 'No title'),
                 content: stripHtmlTags(item.description || item.content || ''),
                 url: item.link || '',
                 publishedAt: new Date(item.pubDate || Date.now()),
                 importance: Math.floor(Math.random() * 5) + 1, // ランダム重要度
-                category: 'Google News Test Random', // テスト用ランダム記事であることを明示
+                category: config_1.config.test.testCategoryName, // テスト用ランダム記事であることを明示
                 summary: stripHtmlTags(item.description || item.content || ''),
                 isDeliveryTarget: true,
                 isTranslated: false,
@@ -336,7 +345,8 @@ function parseRSSFeed(xmlText) {
 }
 // 企業一覧取得API
 exports.getCompanies = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         // インデックス構築中は簡素なクエリを使用
@@ -358,7 +368,8 @@ exports.getCompanies = (0, https_1.onRequest)({
 });
 // 企業追加API
 exports.addCompany = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         const { name, url, rssUrl, redditUrl, priority } = req.body;
@@ -392,7 +403,8 @@ exports.addCompany = (0, https_1.onRequest)({
 });
 // 企業編集API
 exports.updateCompany = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         const { companyId, name, rssUrl, redditUrl } = req.body;
@@ -430,7 +442,8 @@ exports.updateCompany = (0, https_1.onRequest)({
 });
 // 企業削除API
 exports.deleteCompany = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         const { companyId } = req.body;
@@ -454,7 +467,8 @@ exports.deleteCompany = (0, https_1.onRequest)({
 });
 // 全ニュース記事削除API（テスト用）
 exports.clearAllNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         const newsSnapshot = await db.collection("news").get();
@@ -473,9 +487,55 @@ exports.clearAllNews = (0, https_1.onRequest)({
         res.status(500).json({ success: false, error: "Failed to clear news" });
     }
 });
+// 記事クリーンナップAPI（完全削除・デバッグ用）
+exports.cleanupNews = (0, https_1.onRequest)({
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
+}, async (req, res) => {
+    try {
+        firebase_functions_1.logger.info("Starting news cleanup process...");
+        // 全記事を取得
+        const newsSnapshot = await db.collection("news").get();
+        const totalArticles = newsSnapshot.docs.length;
+        firebase_functions_1.logger.info(`Found ${totalArticles} articles to delete`);
+        if (totalArticles === 0) {
+            res.json({
+                success: true,
+                message: "No articles found to cleanup"
+            });
+            return;
+        }
+        // バッチ削除（Firestoreの制限により500件ずつ処理）
+        const batchSize = 500;
+        let deletedCount = 0;
+        for (let i = 0; i < newsSnapshot.docs.length; i += batchSize) {
+            const batch = db.batch();
+            const batchDocs = newsSnapshot.docs.slice(i, i + batchSize);
+            batchDocs.forEach(doc => {
+                batch.delete(doc.ref);
+            });
+            await batch.commit();
+            deletedCount += batchDocs.length;
+            firebase_functions_1.logger.info(`Deleted batch: ${deletedCount}/${totalArticles} articles`);
+        }
+        firebase_functions_1.logger.info(`News cleanup completed. Deleted ${deletedCount} articles`);
+        res.json({
+            success: true,
+            message: `Successfully deleted ${deletedCount} articles from the database`
+        });
+    }
+    catch (error) {
+        firebase_functions_1.logger.error("Error during news cleanup:", error);
+        res.status(500).json({
+            success: false,
+            error: "Failed to cleanup news articles"
+        });
+    }
+});
 // 配信対象記事の翻訳処理API
 exports.translateDeliveryTargetNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [openaiApiKey, openaiApiUrl]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting translation process for delivery target news...");
@@ -539,7 +599,8 @@ exports.translateDeliveryTargetNews = (0, https_1.onRequest)({
 });
 // 配信処理API（Slack送信）
 exports.deliverNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting news delivery process...");
@@ -595,7 +656,8 @@ exports.deliverNews = (0, https_1.onRequest)({
 });
 // ニュース記事一覧取得API（配信対象の記事のみ）
 exports.getNews = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         const { companyId, limit = 10 } = req.query;
@@ -627,7 +689,8 @@ exports.getNews = (0, https_1.onRequest)({
 });
 // 情報収集実行API
 exports.runCollection = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting news collection process...");
@@ -678,7 +741,8 @@ exports.runCollection = (0, https_1.onRequest)({
 });
 // 日次レポート送信API
 exports.sendDailyReport = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("日次レポートが送信されました (モック)");
@@ -692,7 +756,8 @@ exports.sendDailyReport = (0, https_1.onRequest)({
 });
 // 週次レポート送信API
 exports.sendWeeklyReport = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("週次レポートが送信されました (モック)");
@@ -706,7 +771,8 @@ exports.sendWeeklyReport = (0, https_1.onRequest)({
 });
 // 実データ収集API（テスト用）
 exports.collectRealData = (0, https_1.onRequest)({
-    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+    cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+    secrets: [webAppUrl]
 }, async (req, res) => {
     try {
         firebase_functions_1.logger.info("Starting real data collection...");
@@ -756,7 +822,7 @@ exports.collectRealData = (0, https_1.onRequest)({
     }
 });
 // 定期実行される情報収集 (毎日午前9時)
-exports.scheduledCollection = (0, scheduler_1.onSchedule)("every day 09:00", async (event) => {
+exports.scheduledCollection = (0, scheduler_1.onSchedule)(config_1.config.schedule.collectionTime, async (event) => {
     firebase_functions_1.logger.info("定期情報収集が実行されました", event);
     try {
         // ここに実際の情報収集ロジックを実装

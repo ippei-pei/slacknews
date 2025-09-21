@@ -1,6 +1,6 @@
 // API呼び出し用のユーティリティ関数
 
-const API_BASE = 'https://us-central1-slack-news-63e2e.cloudfunctions.net';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://us-central1-slack-news-63e2e.cloudfunctions.net';
 
 export interface Company {
   id: string;
@@ -225,6 +225,21 @@ export async function translateDeliveryTargetNews(): Promise<ApiResponse<{ messa
 export async function deliverNews(): Promise<ApiResponse<{ message: string }>> {
   try {
     const response = await fetch(`${API_BASE}/deliverNews`, {
+      method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 記事クリーンナップ（完全削除・デバッグ用）
+export async function cleanupNews(): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/cleanupNews`, {
       method: 'POST',
     });
     return await response.json();

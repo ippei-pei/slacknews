@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getCompanies, addCompany, updateCompany, deleteCompany, getNews, runCollection, sendDailyReport, sendWeeklyReport, translateDeliveryTargetNews, deliverNews, Company, NewsArticle } from '@/lib/api';
+import { getCompanies, addCompany, updateCompany, deleteCompany, getNews, runCollection, sendDailyReport, sendWeeklyReport, translateDeliveryTargetNews, deliverNews, cleanupNews, Company, NewsArticle } from '@/lib/api';
 
 export default function Home() {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -17,6 +17,8 @@ export default function Home() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null);
+  // 記事クリーンナップ用の状態
+  const [showCleanupConfirm, setShowCleanupConfirm] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -135,6 +137,17 @@ export default function Home() {
     } finally {
       setActionLoading(null);
     }
+  };
+
+  // 記事クリーンナップの確認
+  const handleCleanupConfirm = () => {
+    setShowCleanupConfirm(true);
+  };
+
+  // 記事クリーンナップの実行
+  const handleCleanupNews = async () => {
+    setShowCleanupConfirm(false);
+    await handleAction('cleanup', cleanupNews);
   };
 
   // 週の開始日を取得（月曜日を週の開始とする）
@@ -375,8 +388,11 @@ export default function Home() {
 
           <div className="col-lg-6">
             <div className="card">
-              <div className="card-header">
+              <div className="card-header d-flex justify-content-between align-items-center">
                 <h5 className="card-title mb-0">システム操作</h5>
+                <a href="/slack-mock" className="btn btn-outline-info btn-sm">
+                  📱 Slackモック
+                </a>
               </div>
               <div className="card-body">
                 <div className="alert alert-info mb-3">
@@ -451,6 +467,20 @@ export default function Home() {
                       </>
                     ) : (
                       '記事配信実行'
+                    )}
+                  </button>
+                  <button 
+                    className="btn btn-outline-danger"
+                    disabled={actionLoading === 'cleanup'}
+                    onClick={handleCleanupConfirm}
+                  >
+                    {actionLoading === 'cleanup' ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                        削除中...
+                      </>
+                    ) : (
+                      '記事クリーンナップ（全削除）'
                     )}
                   </button>
                 </div>
@@ -764,6 +794,41 @@ export default function Home() {
                 </button>
                 <button type="button" className="btn btn-danger" onClick={confirmDeleteCompany}>
                   削除
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 記事クリーンナップ確認ダイアログ */}
+      {showCleanupConfirm && (
+        <div className="modal show d-block" tabIndex={-1} style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title text-danger">⚠️ 記事クリーンナップ</h5>
+                <button type="button" className="btn-close" onClick={() => setShowCleanupConfirm(false)}></button>
+              </div>
+              <div className="modal-body">
+                <div className="alert alert-danger">
+                  <h6 className="alert-heading">⚠️ 危険な操作です</h6>
+                  <p className="mb-0">データベース内の<strong>すべての記事</strong>を完全に削除します。</p>
+                </div>
+                <p><strong>この操作により以下が削除されます：</strong></p>
+                <ul>
+                  <li>すべてのニュース記事（翻訳済み・未翻訳問わず）</li>
+                  <li>記事のメタデータ（重要度、カテゴリ、配信ステータス等）</li>
+                  <li>記事の関連情報（公開日、取得日等）</li>
+                </ul>
+                <p className="text-danger"><strong>この操作は取り消せません。本当に実行しますか？</strong></p>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowCleanupConfirm(false)}>
+                  キャンセル
+                </button>
+                <button type="button" className="btn btn-danger" onClick={handleCleanupNews}>
+                  完全削除を実行
                 </button>
               </div>
             </div>
