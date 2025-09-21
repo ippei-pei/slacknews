@@ -2,7 +2,7 @@ import { onRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
-import { logger } from "firebase-functions";
+import { logger, config } from "firebase-functions";
 import * as dotenv from "dotenv";
 
 // .envファイルを読み込み
@@ -169,23 +169,26 @@ function stripHtmlTags(html: string): string {
     .trim();
 }
 
-// gpt-5 nanoを使用した日本語翻訳関数
+// gpt-4o-miniを使用した日本語翻訳関数
 async function translateToJapanese(text: string): Promise<string> {
-  // .envファイルからAPIキーを取得
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  
-  if (!OPENAI_API_KEY) {
-    throw new Error('OpenAI API key is required for translation. Please set OPENAI_API_KEY in .env file.');
-  }
+  try {
+    logger.info('Starting translation process...');
+    
+    // Firebase Functionsの設定からAPIキーを取得
+    const OPENAI_API_KEY = config().openai?.api_key || process.env.OPENAI_API_KEY;
+    
+    logger.info(`API Key exists: ${!!OPENAI_API_KEY}`);
+    logger.info(`API Key length: ${OPENAI_API_KEY ? OPENAI_API_KEY.length : 0}`);
+    logger.info(`API Key prefix: ${OPENAI_API_KEY ? OPENAI_API_KEY.substring(0, 10) + '...' : 'N/A'}`);
+    
+    if (!OPENAI_API_KEY) {
+      throw new Error('OpenAI API key is required for translation. Please set openai.api_key in Firebase Functions config.');
+    }
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-5-nano',
+    logger.info(`Translating text: ${text.substring(0, 100)}...`);
+
+    const requestBody = {
+      model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
@@ -198,34 +201,63 @@ async function translateToJapanese(text: string): Promise<string> {
       ],
       max_tokens: 1000,
       temperature: 0.3,
-    }),
-  });
+    };
 
-  if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.status} - ${response.statusText}`);
+    logger.info(`Request body: ${JSON.stringify(requestBody, null, 2)}`);
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    logger.info(`Response status: ${response.status}`);
+    logger.info(`Response headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error(`OpenAI API error response: ${errorText}`);
+      throw new Error(`OpenAI API error: ${response.status} - ${response.statusText} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    logger.info(`Response data: ${JSON.stringify(data, null, 2)}`);
+    
+    const translatedText = data.choices[0]?.message?.content?.trim();
+    
+    if (!translatedText) {
+      logger.error('No translation received from OpenAI API');
+      throw new Error('No translation received from OpenAI API');
+    }
+
+    logger.info(`Translation successful: ${translatedText.substring(0, 100)}...`);
+    return translatedText;
+    
+  } catch (error) {
+    logger.error('Translation error:', error);
+    throw error;
   }
-
-  const data = await response.json();
-  const translatedText = data.choices[0]?.message?.content?.trim();
-  
-  if (!translatedText) {
-    throw new Error('No translation received from OpenAI API');
-  }
-
-  return translatedText;
 }
 
 
-// Google Newsから当日記事を取得する関数
-async function collectTodaysGoogleNews(company: any, count: number = 20) {
+// 【テスト用】Google Newsから過去一週間のランダム記事を取得する関数
+// 企業非依存で、テスト目的の記事収集を行う
+async function collectTestRandomGoogleNews(count: number = 20) {
   try {
-    logger.info(`Collecting today's Google News for ${company.name}`);
+    logger.info(`Collecting ${count} random Google News articles from the past week`);
     
-    // 当日の日付を取得
+    // 過去一週間の日付範囲を取得
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD形式
+    const oneWeekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const todayStr = today.toISOString().split('T')[0];
+    const oneWeekAgoStr = oneWeekAgo.toISOString().split('T')[0];
     
-    // 様々なキーワードでGoogle Newsを検索（当日の記事のみ）
+    logger.info(`Searching for articles from ${oneWeekAgoStr} to ${todayStr}`);
+    
+    // 様々なキーワードでGoogle Newsを検索（過去一週間）
     const keywords = [
       'technology', 'AI', 'artificial intelligence', 'startup', 'innovation',
       'software', 'hardware', 'mobile', 'internet', 'cybersecurity',
@@ -239,7 +271,7 @@ async function collectTodaysGoogleNews(company: any, count: number = 20) {
     // 複数のキーワードで検索して記事を集める
     for (let i = 0; i < Math.min(keywords.length, 8); i++) {
       const keyword = keywords[i];
-      const googleNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en&when:1d`;
+      const googleNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en&when:7d`;
       
       logger.info(`Searching with keyword: ${keyword}`);
       
@@ -250,16 +282,15 @@ async function collectTodaysGoogleNews(company: any, count: number = 20) {
         const items = parseRSSFeed(xmlText);
         logger.info(`Found ${items.length} articles for keyword: ${keyword}`);
         
-        // 当日の記事のみをフィルタリング
-        const todayItems = items.filter(item => {
+        // 過去一週間の記事をフィルタリング
+        const recentItems = items.filter(item => {
           if (!item.pubDate) return false;
           const itemDate = new Date(item.pubDate);
-          const itemDateStr = itemDate.toISOString().split('T')[0];
-          return itemDateStr === todayStr;
+          return itemDate >= oneWeekAgo && itemDate <= today;
         });
         
-        logger.info(`Found ${todayItems.length} today's articles for keyword: ${keyword}`);
-        allArticles = allArticles.concat(todayItems);
+        logger.info(`Found ${recentItems.length} recent articles for keyword: ${keyword}`);
+        allArticles = allArticles.concat(recentItems);
         
         // 少し待機してAPI制限を避ける
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -274,23 +305,43 @@ async function collectTodaysGoogleNews(company: any, count: number = 20) {
       index === self.findIndex(a => a.link === article.link)
     );
     
-    logger.info(`Total unique today's articles found: ${uniqueArticles.length}`);
+    logger.info(`Total unique recent articles found: ${uniqueArticles.length}`);
     
     // ランダムに記事を選択（最大count件）
     const shuffledItems = uniqueArticles.sort(() => 0.5 - Math.random());
     const selectedItems = shuffledItems.slice(0, count);
     
-    logger.info(`Selected ${selectedItems.length} articles for ${company.name}`);
+    logger.info(`Selected ${selectedItems.length} random articles`);
     
+    // 既存のテスト用ランダム記事をチェックして重複を避ける
+    const existingUrls = new Set<string>();
+    const existingNewsSnapshot = await db.collection("news")
+      .where("category", "==", "Google News Test Random")
+      .get();
+    
+    existingNewsSnapshot.docs.forEach(doc => {
+      const data = doc.data() as NewsArticle;
+      existingUrls.add(data.url);
+    });
+    
+    logger.info(`Found ${existingUrls.size} existing test random articles`);
+    
+    let addedCount = 0;
     for (const item of selectedItems) {
+      // 重複チェック（URLベース）
+      if (existingUrls.has(item.link || '')) {
+        logger.info(`Skipped duplicate article: ${item.title}`);
+        continue;
+      }
+      
       const newsData: Omit<NewsArticle, "id"> = {
-        companyId: company.id,
+        companyId: 'TEST_RANDOM', // テスト用ランダム記事の識別子
         title: stripHtmlTags(item.title || 'No title'),
         content: stripHtmlTags(item.description || item.content || ''),
         url: item.link || '',
         publishedAt: new Date(item.pubDate || Date.now()),
         importance: Math.floor(Math.random() * 5) + 1, // ランダム重要度
-        category: 'Google News Today',
+        category: 'Google News Test Random', // テスト用ランダム記事であることを明示
         summary: stripHtmlTags(item.description || item.content || ''),
         isDeliveryTarget: true,
         isTranslated: false,
@@ -299,23 +350,16 @@ async function collectTodaysGoogleNews(company: any, count: number = 20) {
         createdAt: new Date()
       };
 
-      // 重複チェック
-      const existingNews = await db.collection("news")
-        .where("companyId", "==", company.id)
-        .where("url", "==", newsData.url)
-        .limit(1)
-        .get();
-
-      if (existingNews.empty) {
-        await db.collection("news").add(newsData);
-        logger.info(`Added today's news: ${item.title}`);
-      } else {
-        logger.info(`Skipped duplicate today's news: ${item.title}`);
-      }
+      await db.collection("news").add(newsData);
+      existingUrls.add(item.link || '');
+      addedCount++;
+      logger.info(`Added test random news: ${item.title}`);
     }
     
+    logger.info(`Successfully added ${addedCount} new test random articles`);
+    
   } catch (error) {
-    logger.error(`Error collecting today's Google News for ${company.name}:`, error);
+    logger.error(`Error collecting test random Google News:`, error);
   }
 }
 
@@ -414,6 +458,49 @@ export const addCompany = onRequest({
   }
 });
 
+// 企業編集API
+export const updateCompany = onRequest({ 
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
+}, async (req, res) => {
+  try {
+    const { companyId, name, rssUrl, redditUrl } = req.body;
+
+    if (!companyId) {
+      res.status(400).json({
+        success: false,
+        error: "Company ID is required"
+      });
+      return;
+    }
+
+    if (!name) {
+      res.status(400).json({
+        success: false,
+        error: "Company name is required"
+      });
+      return;
+    }
+
+    const companyData = {
+      name,
+      rssUrl: rssUrl || null,
+      redditUrl: redditUrl || null,
+      updatedAt: new Date()
+    };
+
+    await db.collection("companies").doc(companyId).update(companyData);
+
+    res.json({
+      success: true,
+      message: "企業情報が更新されました",
+      data: { id: companyId, ...companyData }
+    });
+  } catch (error) {
+    logger.error("Error updating company:", error);
+    res.status(500).json({ success: false, error: "Failed to update company" });
+  }
+});
+
 // 企業削除API
 export const deleteCompany = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"]
@@ -471,6 +558,7 @@ export const translateDeliveryTargetNews = onRequest({
 }, async (req, res) => {
   try {
     logger.info("Starting translation process for delivery target news...");
+    logger.info(`Environment variables check: OPENAI_API_KEY exists: ${!!process.env.OPENAI_API_KEY}`);
 
     // 全記事を取得してからフィルタリング（複合クエリのインデックス問題を回避）
     const newsSnapshot = await db.collection("news").get();
@@ -481,11 +569,19 @@ export const translateDeliveryTargetNews = onRequest({
     const targetNews = newsSnapshot.docs.filter(doc => {
       const data = doc.data() as NewsArticle;
       const isTarget = data.isDeliveryTarget === true && data.isTranslated === false;
-      logger.info(`Article ${doc.id}: isDeliveryTarget=${data.isDeliveryTarget}, isTranslated=${data.isTranslated}, isTarget=${isTarget}`);
+      logger.info(`Article ${doc.id}: isDeliveryTarget=${data.isDeliveryTarget}, isTranslated=${data.isTranslated}, isTarget=${isTarget}, title=${data.title.substring(0, 50)}...`);
       return isTarget;
     });
 
     logger.info(`Found ${targetNews.length} articles to translate`);
+
+    if (targetNews.length === 0) {
+      logger.warn("No articles found for translation. Checking all articles...");
+      newsSnapshot.docs.forEach(doc => {
+        const data = doc.data() as NewsArticle;
+        logger.info(`Article ${doc.id}: isDeliveryTarget=${data.isDeliveryTarget}, isTranslated=${data.isTranslated}, title=${data.title.substring(0, 50)}...`);
+      });
+    }
 
     let translatedCount = 0;
 
@@ -493,10 +589,17 @@ export const translateDeliveryTargetNews = onRequest({
       const article = doc.data() as NewsArticle;
       
       try {
+        logger.info(`Starting translation for article: ${article.title.substring(0, 100)}...`);
+        
         // 翻訳処理（エラー時はフォールバック翻訳を使用）
         const translatedTitle = await translateToJapanese(article.title);
+        logger.info(`Title translation completed: ${translatedTitle.substring(0, 100)}...`);
+        
         const translatedContent = await translateToJapanese(article.content);
+        logger.info(`Content translation completed: ${translatedContent.substring(0, 100)}...`);
+        
         const translatedSummary = await translateToJapanese(article.summary);
+        logger.info(`Summary translation completed: ${translatedSummary.substring(0, 100)}...`);
 
         // 翻訳結果をDBに保存
         await doc.ref.update({
@@ -507,13 +610,15 @@ export const translateDeliveryTargetNews = onRequest({
         });
 
         translatedCount++;
-        logger.info(`Translated article: ${article.title} -> ${translatedTitle}`);
+        logger.info(`Successfully translated and saved article: ${article.title} -> ${translatedTitle}`);
       } catch (translateError) {
         logger.error(`Error translating article ${article.title}:`, translateError);
         // 翻訳エラーの場合はスキップ（フォールバック処理は禁止）
         logger.warn(`Skipping translation for article: ${article.title}`);
       }
     }
+
+    logger.info(`Translation process completed. Translated ${translatedCount} articles.`);
 
     res.json({
       success: true,
@@ -671,14 +776,15 @@ export const runCollection = onRequest({
           collectedCount++;
         }
         
-        // 実データ：当日のGoogle News記事を収集
-        await collectTodaysGoogleNews(company, 20);
-        collectedCount++;
-        
       } catch (error) {
         logger.error(`Error collecting news for ${company.name}:`, error);
       }
     }
+    
+    // 【テスト用】ランダム記事収集（企業非依存、20件）
+    // テスト目的で、過去一週間のGoogle Newsからランダムに記事を収集
+    await collectTestRandomGoogleNews(20);
+    collectedCount++;
 
     res.json({ 
       success: true, 
@@ -762,14 +868,15 @@ export const collectRealData = onRequest({
           collectedCount++;
         }
         
-        // 当日のGoogle News記事を収集
-        await collectTodaysGoogleNews(company, 20);
-        collectedCount++;
-        
       } catch (error) {
         logger.error(`Error collecting real data for ${company.name}:`, error);
       }
     }
+    
+    // 【テスト用】ランダム記事収集（企業非依存、20件）
+    // テスト目的で、過去一週間のGoogle Newsからランダムに記事を収集
+    await collectTestRandomGoogleNews(20);
+    collectedCount++;
 
     res.json({ 
       success: true, 

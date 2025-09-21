@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getCompanies, addCompany, getNews, runCollection, sendDailyReport, sendWeeklyReport, translateDeliveryTargetNews, deliverNews, Company, NewsArticle } from '@/lib/api';
+import { getCompanies, addCompany, updateCompany, deleteCompany, getNews, runCollection, sendDailyReport, sendWeeklyReport, translateDeliveryTargetNews, deliverNews, Company, NewsArticle } from '@/lib/api';
 
 export default function Home() {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -12,6 +12,11 @@ export default function Home() {
   // 記事がある週（2025年9月15日〜21日）を初期表示にする
   const [currentWeek, setCurrentWeek] = useState(new Date('2025-09-17'));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // 企業編集用の状態
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null);
 
   useEffect(() => {
     loadData();
@@ -68,6 +73,50 @@ export default function Home() {
       loadData();
     } else {
       setMessage({ type: 'error', text: result.error || '企業の追加に失敗しました' });
+    }
+  };
+
+  const handleEditCompany = (company: Company) => {
+    setEditingCompany(company);
+    setShowEditModal(true);
+  };
+
+  const handleUpdateCompany = async (formData: FormData) => {
+    if (!editingCompany) return;
+
+    const companyData = {
+      name: formData.get('companyName') as string,
+      rssUrl: formData.get('rssUrl') as string || undefined,
+      redditUrl: formData.get('redditUrl') as string || undefined,
+    };
+
+    const result = await updateCompany(editingCompany.id, companyData);
+    if (result.success) {
+      setMessage({ type: 'success', text: '企業情報が正常に更新されました' });
+      setShowEditModal(false);
+      setEditingCompany(null);
+      loadData();
+    } else {
+      setMessage({ type: 'error', text: result.error || '企業の更新に失敗しました' });
+    }
+  };
+
+  const handleDeleteCompany = (company: Company) => {
+    setCompanyToDelete(company);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteCompany = async () => {
+    if (!companyToDelete) return;
+
+    const result = await deleteCompany(companyToDelete.id);
+    if (result.success) {
+      setMessage({ type: 'success', text: '企業が正常に削除されました' });
+      setShowDeleteConfirm(false);
+      setCompanyToDelete(null);
+      loadData();
+    } else {
+      setMessage({ type: 'error', text: result.error || '企業の削除に失敗しました' });
     }
   };
 
@@ -278,9 +327,33 @@ export default function Home() {
                   <div>
                     <div className="list-group mb-3">
                       {companies.map((company) => (
-                        <div key={company.id} className="list-group-item py-2">
-                          <h6 className="mb-1">{company.name}</h6>
-                          <small className="text-muted">{company.url}</small>
+                        <div key={company.id} className="list-group-item py-2 d-flex justify-content-between align-items-center">
+                          <div>
+                            <h6 className="mb-1">{company.name}</h6>
+                            <small className="text-muted">{company.url}</small>
+                            <div className="mt-1">
+                              {company.rssUrl && (
+                                <span className="badge bg-info me-1">RSS</span>
+                              )}
+                              {company.redditUrl && (
+                                <span className="badge bg-warning">Reddit</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="btn-group btn-group-sm">
+                            <button 
+                              className="btn btn-outline-primary"
+                              onClick={() => handleEditCompany(company)}
+                            >
+                              編集
+                            </button>
+                            <button 
+                              className="btn btn-outline-danger"
+                              onClick={() => handleDeleteCompany(company)}
+                            >
+                              削除
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -289,6 +362,13 @@ export default function Home() {
                     </button>
                   </div>
                 )}
+                
+                {/* テスト用ランダム記事の情報表示 */}
+                <div className="mt-3 p-2 bg-light rounded">
+                  <small className="text-muted">
+                    <strong>テスト用ランダム記事:</strong> 企業ID「TEST_RANDOM」で識別される過去一週間のGoogle News記事
+                  </small>
+                </div>
               </div>
             </div>
       </div>
@@ -603,6 +683,93 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* 企業編集モーダル */}
+      {showEditModal && editingCompany && (
+        <div className="modal show d-block" tabIndex={-1} style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">企業を編集</h5>
+                <button type="button" className="btn-close" onClick={() => setShowEditModal(false)}></button>
+              </div>
+              <div className="modal-body">
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.currentTarget);
+                  handleUpdateCompany(formData);
+                }}>
+                  <div className="mb-3">
+                    <label htmlFor="editCompanyName" className="form-label">企業名</label>
+                    <input 
+                      type="text" 
+                      className="form-control" 
+                      id="editCompanyName" 
+                      name="companyName" 
+                      defaultValue={editingCompany.name}
+                      required 
+                    />
+                  </div>
+                  <div className="mb-3">
+                    <label htmlFor="editRssUrl" className="form-label">RSS URL</label>
+                    <input 
+                      type="url" 
+                      className="form-control" 
+                      id="editRssUrl" 
+                      name="rssUrl" 
+                      defaultValue={editingCompany.rssUrl || ''}
+                    />
+                  </div>
+                  <div className="mb-3">
+                    <label htmlFor="editRedditUrl" className="form-label">Reddit URL</label>
+                    <input 
+                      type="url" 
+                      className="form-control" 
+                      id="editRedditUrl" 
+                      name="redditUrl" 
+                      defaultValue={editingCompany.redditUrl || ''}
+                    />
+                  </div>
+                  <div className="modal-footer">
+                    <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>
+                      キャンセル
+                    </button>
+                    <button type="submit" className="btn btn-primary">
+                      更新
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 削除確認ダイアログ */}
+      {showDeleteConfirm && companyToDelete && (
+        <div className="modal show d-block" tabIndex={-1} style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">企業を削除</h5>
+                <button type="button" className="btn-close" onClick={() => setShowDeleteConfirm(false)}></button>
+              </div>
+              <div className="modal-body">
+                <p>「{companyToDelete.name}」を削除してもよろしいですか？</p>
+                <p className="text-muted">この操作は取り消せません。</p>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowDeleteConfirm(false)}>
+                  キャンセル
+                </button>
+                <button type="button" className="btn btn-danger" onClick={confirmDeleteCompany}>
+                  削除
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

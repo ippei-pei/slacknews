@@ -91,6 +91,48 @@ export async function addCompany(companyData: {
   }
 }
 
+// 企業編集
+export async function updateCompany(companyId: string, companyData: {
+  name: string;
+  rssUrl?: string;
+  redditUrl?: string;
+}): Promise<ApiResponse<Company>> {
+  try {
+    const response = await fetch(`${API_BASE}/updateCompany`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ companyId, ...companyData }),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 企業削除
+export async function deleteCompany(companyId: string): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/deleteCompany`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ companyId }),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
 // ニュース記事取得
 export async function getNews(companyId?: string, limit: number = 10): Promise<ApiResponse<NewsArticle[]>> {
   try {
