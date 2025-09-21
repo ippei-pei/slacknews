@@ -1,22 +1,24 @@
 {
-  "name": "slacknews-e2e-tests",
+  "name": "slacknews",
   "version": "1.0.0",
-  "description": "E2E tests for SlackNews automated competitor intelligence system",
+  "description": "SlackNews - 競合企業ニュース自動収集・分析システム",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "test": "playwright test",
-    "test:ui": "playwright test --ui",
-    "test:headed": "playwright test --headed",
-    "test:debug": "playwright test --debug",
-    "test:report": "playwright show-report",
-    "dev": "node server.js",
-    "install:browsers": "playwright install"
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:functions\"",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:functions": "npm run dev --workspace=apps/functions",
+    "build": "npm run build --workspace=apps/web && npm run build --workspace=apps/functions",
+    "deploy": "npm run deploy --workspace=apps/functions",
+    "install:all": "npm install && npm install --workspace=apps/web && npm install --workspace=apps/functions"
   },
   "devDependencies": {
-    "@playwright/test": "^1.40.0",
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "concurrently": "^8.2.2"
   },
-  "dependencies": {
-    "dotenv": "^16.0.0"
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
   }
 }

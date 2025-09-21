@@ -1,0 +1,195 @@
+// API呼び出し用のユーティリティ関数
+
+const API_BASE = 'https://us-central1-slack-news-63e2e.cloudfunctions.net';
+
+export interface Company {
+  id: string;
+  name: string;
+  url: string;
+  rssUrl?: string;
+  redditUrl?: string;
+  priority: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface NewsArticle {
+  id: string;
+  companyId: string;
+  title: string;
+  content: string;
+  url: string;
+  publishedAt: Date;
+  importance: number;
+  category: string;
+  summary: string;
+  translatedTitle?: string;
+  translatedContent?: string;
+  translatedSummary?: string;
+  isDeliveryTarget: boolean;
+  isTranslated: boolean;
+  informationAcquisitionDate: Date;
+  deliveryDate?: Date;
+  deliveryStatus: 'pending' | 'delivered' | 'failed';
+  createdAt: Date;
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+// 企業一覧取得
+export async function getCompanies(): Promise<ApiResponse<Company[]>> {
+  try {
+    const response = await fetch(`${API_BASE}/getCompanies`);
+    const data = await response.json();
+    
+    if (data.success && data.data) {
+      // FirestoreのタイムスタンプをDateオブジェクトに変換
+      data.data = data.data.map((company: any) => ({
+        ...company,
+        createdAt: company.createdAt?._seconds ? new Date(company.createdAt._seconds * 1000) : new Date(company.createdAt),
+        updatedAt: company.updatedAt?._seconds ? new Date(company.updatedAt._seconds * 1000) : new Date(company.updatedAt)
+      }));
+    }
+    
+    return data;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 企業追加
+export async function addCompany(companyData: {
+  name: string;
+  url: string;
+  rssUrl?: string;
+  redditUrl?: string;
+  priority?: number;
+}): Promise<ApiResponse<Company>> {
+  try {
+    const response = await fetch(`${API_BASE}/addCompany`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(companyData),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// ニュース記事取得
+export async function getNews(companyId?: string, limit: number = 10): Promise<ApiResponse<NewsArticle[]>> {
+  try {
+    const params = new URLSearchParams();
+    if (companyId) params.append('companyId', companyId);
+    params.append('limit', limit.toString());
+    
+    const response = await fetch(`${API_BASE}/getNews?${params}`);
+    const data = await response.json();
+    
+    if (data.success && data.data) {
+      // FirestoreのタイムスタンプをDateオブジェクトに変換
+      data.data = data.data.map((article: any) => ({
+        ...article,
+        publishedAt: article.publishedAt?._seconds ? new Date(article.publishedAt._seconds * 1000) : new Date(article.publishedAt),
+        createdAt: article.createdAt?._seconds ? new Date(article.createdAt._seconds * 1000) : new Date(article.createdAt)
+      }));
+    }
+    
+    return data;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 情報収集実行
+export async function runCollection(): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/runCollection`, {
+      method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 日次レポート送信
+export async function sendDailyReport(): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/sendDailyReport`, {
+      method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 週次レポート送信
+export async function sendWeeklyReport(): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/sendWeeklyReport`, {
+      method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 配信対象記事の翻訳処理
+export async function translateDeliveryTargetNews(): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/translateDeliveryTargetNews`, {
+      method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+// 記事配信処理（Slack送信）
+export async function deliverNews(): Promise<ApiResponse<{ message: string }>> {
+  try {
+    const response = await fetch(`${API_BASE}/deliverNews`, {
+      method: 'POST',
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}

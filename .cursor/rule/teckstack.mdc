@@ -1,0 +1,38 @@
+---
+alwaysApply: true
+---
+
+  **Runtime / Platform**
+    -   **Node.js:** `20.x` (Required for Firebase CLI v14+)
+    -   **Package Manager:** `npm` (comes with Node.js)
+-   **Frontend**
+    -   **Framework:** `Next.js 14.2.3`
+    -   **UI Library:** `React 18.3.1`
+    -   **Language:** `TypeScript 5.8.x`
+    -   **Styling:** `Bootstrap 5.3.3`
+-   **Backend / API**
+    -   **Platform:** `Firebase Cloud Functions 4.9.0`
+    *   **Admin SDK:** `Firebase Admin SDK 12.1.0` (for server-side Firebase access)
+    -   **Language:** `TypeScript 5.8.x`
+-   **Database**
+    -   **Type:** NoSQL Document Store
+    -   **Service:** `Firebase Firestore`
+-   **LLM** gpt-5-xx  **Runtime / Platform**
+    -   **Node.js:** `20.x` (Required for Firebase CLI v14+)
+    -   **Package Manager:** `npm` (comes with Node.js)
+-   **Frontend**
+    -   **Framework:** `Next.js 14.2.3`
+    -   **UI Library:** `React 18.3.1`
+    -   **Language:** `TypeScript 5.8.x`
+    -   **Styling:** `Bootstrap 5.3.3`
+-   **Backend / API**
+    -   **Platform:** `Firebase Cloud Functions 4.9.0`
+    *   **Admin SDK:** `Firebase Admin SDK 12.1.0` (for server-side Firebase access)
+    -   **Language:** `TypeScript 5.8.x`
+-   **Database**
+    -   **Type:** NoSQL Document Store
+    -   **Service:** `Firebase Firestore`
+-   **LLM** gpt-5-xx
+
+
+※emulatorは利用せず、検証用のfirebase環境で確認する
