@@ -1,5 +1,4 @@
 import { onRequest } from "firebase-functions/v2/https";
-import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
@@ -970,54 +969,12 @@ export const collectRealData = onRequest({
 });
 
 // 定期実行される情報収集 (毎日午前9時)
-export const scheduledCollection = onSchedule(config.schedule.collectionTime, async (event) => {
-  logger.info("定期情報収集が実行されました", event);
-  try {
-    // ここに実際の情報収集ロジックを実装
-    // runCollection関数を呼び出すなど
-    const dummyCompanySnapshot = await db.collection("companies").limit(1).get();
-    let companyId = "dummy-company-id";
-    if (!dummyCompanySnapshot.empty) {
-      companyId = dummyCompanySnapshot.docs[0].id;
-    } else {
-      const newCompanyRef = await db.collection("companies").add({
-        name: "Scheduled Dummy Company",
-        url: "http://scheduled-dummy.com",
-        priority: 2,
-        isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-      companyId = newCompanyRef.id;
-    }
-
-    const dummyNews: Omit<NewsArticle, "id"> = {
-      companyId: companyId,
-      title: `定期収集ダミーニュース ${new Date().toLocaleString()}`,
-      content: "これは定期収集されたダミーのニュース記事です。",
-      url: `http://scheduled-dummy.com/news/${Date.now()}`,
-      publishedAt: new Date(),
-      importance: Math.floor(Math.random() * 5) + 1,
-      category: "市場動向",
-      summary: "これは定期収集されたダミーのニュース記事です。",
-      isDeliveryTarget: true,
-      isTranslated: false,
-      informationAcquisitionDate: new Date(),
-      deliveryStatus: 'pending',
-      createdAt: new Date()
-    };
-    await db.collection("news").add(dummyNews);
-
-    logger.info("定期情報収集が完了しました");
-  } catch (error) {
-    logger.error("定期情報収集中にエラーが発生しました:", error);
-  }
-});
+// scheduledCollection はダミー実装を削除済み（将来の実装時に再追加）
 
 // 日次レポート配信API
 export const deliverDailyReport = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl, slackWebhookUrl]
+  secrets: [webAppUrl, slackWebhookUrl, openaiApiKey, openaiApiUrl]
 }, async (req, res) => {
   try {
     const { date } = req.body;
@@ -1038,84 +995,86 @@ export const deliverDailyReport = onRequest({
       return articleDate >= startOfDay && articleDate <= endOfDay;
     }).map(doc => doc.data() as NewsArticle);
 
-    const translatedNews = dailyNews.filter(article => article.isTranslated);
-    const untranslatedNews = dailyNews.filter(article => !article.isTranslated);
+    // LLMで日次サマリを生成
+    const articlesForPrompt = dailyNews.map(a => ({
+      id: a.id,
+      company: a.companyId,
+      title: a.isTranslated ? (a.translatedTitle || a.title) : a.title,
+      content: ((a.isTranslated ? (a.translatedContent || a.translatedSummary) : (a.content || a.summary)) || '').slice(0, 400),
+      category: a.category,
+      publishedAt: a.publishedAt
+    }));
 
-    // 日次レポートメッセージを生成
+    const OPENAI_API_KEY = openaiApiKey.value();
+    const OPENAI_API_URL = openaiApiUrl.value();
+    const model = config.ai.model;
+
+    const systemPrompt = "あなたは日本語のビジネスアナリストです。Slack投稿用に簡潔な日次サマリを日本語で出力します。";
+    const userPrompt = `以下の本日の記事一覧から、Slackに投稿する日次サマリ文（約200文字）を生成してください。\n- 統計や重要度の記載は不要\n- 見出しや装飾は不要、本文のみ\n出力はテキストのみ\n\n記事一覧(JSON):\n${JSON.stringify(articlesForPrompt, null, 2)}`;
+
+    let dailySummary = "";
+    try {
+      const r = await fetch(`${OPENAI_API_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.7,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ]
+        })
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`OpenAI API error: ${r.status} ${r.statusText} ${t}`);
+      }
+      const data = await r.json();
+      dailySummary = (data.choices?.[0]?.message?.content || '').trim();
+    } catch (e) {
+      logger.error('daily summary generation failed', e);
+      dailySummary = dailyNews.length > 0 ? '本日の主要動向については記事をご確認ください。' : '本日は該当する記事がありませんでした。';
+    }
+
+    // 日次レポートメッセージを生成（重要度表記なし）
     const slackMessage = {
       text: `📰 日次ニュースレポート - ${targetDate}`,
       blocks: [
         {
           type: "header",
-          text: {
-            type: "plain_text",
-            text: `📰 日次ニュースレポート - ${targetDate}`
-          }
+          text: { type: "plain_text", text: `📰 日次ニュースレポート - ${targetDate}` }
         },
         {
           type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `本日 ${dailyNews.length} 件の記事を確認しました。\n（翻訳済み: ${translatedNews.length}件、未翻訳: ${untranslatedNews.length}件）`
-          }
+          text: { type: "mrkdwn", text: dailySummary || `本日 ${dailyNews.length} 件の記事を確認しました。` }
         }
       ]
-    };
+    } as any;
 
-    // 主要記事を追加（最大5件）
+    // 主要記事（最大5件、重要度文言を削除）
     if (dailyNews.length > 0) {
-      slackMessage.blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "*📋 主要記事:*"
-        }
-      });
-
-      dailyNews.slice(0, 5).forEach(article => {
+      slackMessage.blocks.push({ type: "section", text: { type: "mrkdwn", text: "*📋 主要記事:*" } });
+      dailyNews.slice(0, 5).forEach((article: NewsArticle) => {
         slackMessage.blocks.push({
           type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*${article.isTranslated ? article.translatedTitle : article.title}*\n${article.isTranslated ? article.translatedContent : article.content}`
-          }
+          text: { type: "mrkdwn", text: `*${article.isTranslated ? (article.translatedTitle || article.title) : article.title}*\n${article.isTranslated ? (article.translatedContent || article.translatedSummary || '') : (article.content || article.summary)}` }
         });
-        slackMessage.blocks.push({
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: `重要度: ${article.importance}/5 | ${article.category} | ${article.isTranslated ? '翻訳済み' : '未翻訳'}`
-            }
-          ]
-        } as any);
       });
-
       if (dailyNews.length > 5) {
-        slackMessage.blocks.push({
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `...他 ${dailyNews.length - 5} 件`
-          }
-        });
+        slackMessage.blocks.push({ type: "section", text: { type: "mrkdwn", text: `...他 ${dailyNews.length - 5} 件` } });
       }
     } else {
-      slackMessage.blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "本日の記事はありません。"
-        }
-      });
+      slackMessage.blocks.push({ type: "section", text: { type: "mrkdwn", text: "本日の記事はありません。" } });
     }
 
     // Slack送信
     const response = await fetch(slackWebhookUrl.value(), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(slackMessage)
     });
 
@@ -1125,24 +1084,18 @@ export const deliverDailyReport = onRequest({
 
     logger.info(`Daily report delivered successfully for ${targetDate}`);
 
-    res.json({
-      success: true,
-      message: `日次レポートを配信しました（${dailyNews.length}件の記事）`
-    });
+    res.json({ success: true, message: `日次レポートを配信しました（${dailyNews.length}件の記事）` });
 
   } catch (error) {
     logger.error("Error in daily report delivery:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "Failed to deliver daily report" 
-    });
+    res.status(500).json({ success: false, error: "Failed to deliver daily report" });
   }
 });
 
 // 週次レポート配信API
 export const deliverWeeklyReport = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl, slackWebhookUrl]
+  secrets: [webAppUrl, slackWebhookUrl, openaiApiKey, openaiApiUrl]
 }, async (req, res) => {
   try {
     const { weekStart } = req.body;
@@ -1168,29 +1121,13 @@ export const deliverWeeklyReport = onRequest({
 
     // const translatedNews = weeklyNews.filter(article => article.isTranslated);
 
-    // 企業別に記事をグループ化
-    const newsByCompany = weeklyNews.reduce((acc, article) => {
-      const companyId = article.companyId;
-      if (!acc[companyId]) acc[companyId] = [];
-      acc[companyId].push(article);
-      return acc;
-    }, {} as Record<string, NewsArticle[]>);
+    // （LLM生成に切り替えたため会社別グルーピングは不要）
 
-    // 競合の動きサマリ生成
-    const competitorSummary = generateCompetitorSummary(weeklyNews);
-    
-    // 各社の動きサマリ生成
-    const companySummaries = Object.entries(newsByCompany).map(([companyId, articles]) => {
-      const companyName = companyId === 'TEST_RANDOM' ? 'テスト用ランダム記事' : `企業ID: ${companyId}`;
-      return {
-        companyId,
-        companyName,
-        summary: generateCompanySummary(articles)
-      };
-    });
-
-    // 自社が取るべき動き生成
-    const strategicAction = generateStrategicAction(weeklyNews, companySummaries);
+    // LLMで文生成
+    const llm = await generateWeeklyReportWithLLM(weeklyNews);
+    const competitorSummary = llm.competitorSummary;
+    const companySummaries = llm.companySummaries;
+    const strategicAction = llm.strategicAction;
 
     // 週次レポートメッセージを生成
     const slackMessage = {
@@ -1227,7 +1164,7 @@ export const deliverWeeklyReport = onRequest({
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `*${company.companyName}*\n${company.summary}`
+            text: `*${company.company || ''}*\n${company.summary}`
           }
         });
       });
@@ -1279,61 +1216,83 @@ export const deliverWeeklyReport = onRequest({
   }
 });
 
-// ヘルパー関数
-function generateCompetitorSummary(weeklyNews: NewsArticle[]): string {
-  if (weeklyNews.length === 0) {
-    return "今週は競合の動きに関する記事はありませんでした。";
+// ヘルパー関数（LLMによる文生成）
+async function generateWeeklyReportWithLLM(weeklyNews: NewsArticle[]): Promise<{
+  competitorSummary: string;
+  companySummaries: { company: string; summary: string }[];
+  strategicAction: string;
+}> {
+  // データがない場合は空の指示で生成（LLMに「記事がない」前提で短く出力させる）
+  const articlesForPrompt = weeklyNews.map(a => ({
+    id: a.id,
+    company: a.companyId,
+    title: a.isTranslated ? (a.translatedTitle || a.title) : a.title,
+    content: ((a.isTranslated ? (a.translatedContent || a.translatedSummary) : (a.content || a.summary)) || '').slice(0, 500),
+    category: a.category,
+    importance: a.importance,
+    publishedAt: a.publishedAt
+  }));
+
+  const systemPrompt = "あなたは日本語のビジネスアナリストです。Slackに投稿可能なテキストのみを、日本語で簡潔に出力します。";
+  const userPrompt = `以下のニュース一覧から、Slack投稿用の週次レポートをJSONで生成してください。\n要件:\n- 競合の動きサマリ: およそ200文字\n- 各社の動きサマリ: 会社ごとに約100文字\n- 自社が取るべき動き: およそ200文字\n- 統計値や数値の羅列は不要\n- 見出しや装飾は不要、本文のみ\n- 出力は必ず次のJSONスキーマに従うこと\n{\n  "competitorSummary": "string",\n  "companySummaries": [{"company": "string", "summary": "string"}],\n  "strategicAction": "string"\n}\nニュース一覧(JSON):\n${JSON.stringify(articlesForPrompt, null, 2)}`;
+
+  // OpenAI Chat Completions 呼び出し
+  const OPENAI_API_KEY = openaiApiKey.value();
+  const OPENAI_API_URL = openaiApiUrl.value();
+  const model = config.ai.model;
+
+  const response = await fetch(`${OPENAI_API_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    logger.error(`OpenAI API error (weekly report): ${errorText}`);
+    throw new Error(`OpenAI API error: ${response.status} - ${response.statusText}`);
   }
 
-  const categories = weeklyNews.reduce((acc, article) => {
-    acc[article.category] = (acc[article.category] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
-  const topCategories = Object.entries(categories)
-    .sort(([,a], [,b]) => b - a)
-    .slice(0, 3)
-    .map(([category, count]) => `${category}(${count}件)`)
-    .join('、');
-
-  const highImportanceCount = weeklyNews.filter(a => a.importance >= 4).length;
-  const highImportanceText = highImportanceCount > 0 ? `特に重要度の高い記事が${highImportanceCount}件` : '';
-
-  return `今週は競合から${weeklyNews.length}件の記事が確認されました。主な分野は${topCategories}です。${highImportanceText}。市場では技術革新や新サービス発表が活発で、競合各社が積極的な動きを見せています。`;
-}
-
-function generateCompanySummary(articles: NewsArticle[]): string {
-  if (articles.length === 0) {
-    return "今週の動きはありませんでした。";
+  const data = await response.json();
+  const content: string | undefined = data.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('LLMから週次レポートの応答が得られませんでした');
   }
 
-  const translatedArticles = articles.filter(a => a.isTranslated);
-  const mainTopics = articles.slice(0, 2).map(a => 
-    a.isTranslated ? a.translatedTitle : a.title
-  ).join('、');
-
-  return `${articles.length}件の記事を確認。主な内容は「${mainTopics}」など。${translatedArticles.length}件が翻訳済み。`;
-}
-
-function generateStrategicAction(weeklyNews: NewsArticle[], companySummaries: any[]): string {
-  if (weeklyNews.length === 0) {
-    return "今週は競合の動きが少なく、現状維持を継続することを推奨します。市場の動向を引き続き監視し、次週以降の動きに備えてください。";
+  // JSON抽出
+  let jsonText = content.trim();
+  const jsonStart = jsonText.indexOf('{');
+  const jsonEnd = jsonText.lastIndexOf('}');
+  if (jsonStart !== -1 && jsonEnd !== -1) {
+    jsonText = jsonText.slice(jsonStart, jsonEnd + 1);
   }
 
-  const highImportanceArticles = weeklyNews.filter(a => a.importance >= 4);
-  const activeCompanies = companySummaries.filter(c => c.summary !== "今週の動きはありませんでした。");
-  
-  let action = "今週の競合動向を踏まえ、以下の対応を推奨します：";
-  
-  if (highImportanceArticles.length > 0) {
-    action += ` 高重要度記事${highImportanceArticles.length}件について詳細分析を実施し、`;
+  try {
+    const parsed = JSON.parse(jsonText);
+    const competitorSummary = String(parsed.competitorSummary || '').trim();
+    const companySummaries = Array.isArray(parsed.companySummaries) ? parsed.companySummaries.map((c: any) => ({
+      company: String(c.company || ''),
+      summary: String(c.summary || '')
+    })) : [];
+    const strategicAction = String(parsed.strategicAction || '').trim();
+    return { competitorSummary, companySummaries, strategicAction };
+  } catch (e) {
+    logger.error('LLM出力のJSON解析に失敗しました', e);
+    // フォールバック（空文言）
+    return {
+      competitorSummary: '今週の動向サマリは取得できませんでした。',
+      companySummaries: [],
+      strategicAction: '推奨アクションは取得できませんでした。'
+    };
   }
-  
-  if (activeCompanies.length > 0) {
-    action += ` 特に活発な${activeCompanies.length}社の動向を重点監視し、`;
-  }
-  
-  action += " 自社の戦略的ポジションを再評価することをお勧めします。市場の変化に迅速に対応できる体制を整備してください。";
-
-  return action;
 }
