@@ -318,7 +318,7 @@ export default function Home() {
                 <a className="nav-link text-dark" href="#">週次レポート</a>
               </li>
               <li className="nav-item">
-                <a className="nav-link text-dark" href="#">設定</a>
+                <a className="nav-link text-dark" href="#settings">設定</a>
               </li>
             </ul>
           </div>
@@ -715,7 +715,7 @@ export default function Home() {
         </div>
 
         {/* Slack設定 */}
-        <div className="card mt-3">
+                <div className="card mt-3" id="settings">
           <div className="card-header">
             <h6 className="mb-0">Slack設定</h6>
           </div>
