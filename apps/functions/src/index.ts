@@ -903,70 +903,7 @@ export const runCollection = onRequest({
 });
 
 
-// 実データ収集API（テスト用）
-export const collectRealData = onRequest({ 
-  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl]
-}, async (req, res) => {
-  try {
-    logger.info("Starting real data collection...");
-
-    // アクティブな企業を取得
-    const companiesSnapshot = await db.collection("companies")
-      .where("isActive", "==", true)
-      .get();
-
-    const companies = companiesSnapshot.docs.map(doc => {
-      const data = doc.data() as Omit<Company, "id">;
-      return {
-        id: doc.id,
-        ...data
-      };
-    });
-
-    logger.info(`Found ${companies.length} active companies`);
-
-    let collectedCount = 0;
-
-    // 各企業に対して実データを収集
-    for (const company of companies) {
-      try {
-        logger.info(`Collecting real data for ${company.name}...`);
-        
-        // RSSフィードが設定されている場合のみ処理
-        if (company.rssUrl) {
-          await collectRSSFeed(company);
-          collectedCount++;
-        }
-        
-        if (company.redditUrl) {
-          await collectRedditFeed(company);
-          collectedCount++;
-        }
-        
-      } catch (error) {
-        logger.error(`Error collecting real data for ${company.name}:`, error);
-      }
-    }
-    
-    // 【テスト用】ランダム記事収集（企業非依存、20件）
-    // テスト目的で、過去一週間のGoogle Newsからランダムに記事を収集
-    await collectTestRandomGoogleNews(20);
-    collectedCount++;
-
-    res.json({ 
-      success: true, 
-      message: `${companies.length}社から${collectedCount}件の実データを収集しました` 
-    });
-
-  } catch (error) {
-    logger.error("Error in collectRealData:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "実データ収集中にエラーが発生しました" 
-    });
-  }
-});
+// collectRealData は runCollection に統合済みのため削除
 
 // 定期実行される情報収集 (毎日午前9時)
 // scheduledCollection はダミー実装を削除済み（将来の実装時に再追加）
