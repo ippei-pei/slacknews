@@ -798,7 +798,7 @@ export const translateDeliveryTargetNews = onRequest({
 // 配信処理API（Slack送信）
 export const deliverNews = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl, slackWebhookUrl]
+  secrets: [webAppUrl, slackBotToken]
 }, async (req, res) => {
   try {
     logger.info("Starting news delivery process...");
@@ -865,20 +865,21 @@ export const deliverNews = onRequest({
           ]
         };
 
-        // Slack Webhook API呼び出し
+        // Slack Web API chat.postMessage 呼び出し
         try {
-          const response = await fetch(slackWebhookUrl.value(), {
+          const settingsDoc = await db.collection("settings").doc("slack").get();
+          const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+          if (!settings?.channelId) throw new Error('channelId not configured');
+          const r = await fetch('https://slack.com/api/chat.postMessage', {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json',
+              'Content-Type': 'application/json; charset=utf-8',
+              'Authorization': `Bearer ${slackBotToken.value()}`
             },
-            body: JSON.stringify(slackMessage)
+            body: JSON.stringify({ channel: settings.channelId, text: slackMessage.text, blocks: slackMessage.blocks })
           });
-
-          if (!response.ok) {
-            throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
-          }
-
+          const data = await r.json();
+          if (!data.ok) throw new Error(`Slack error: ${data.error}`);
           logger.info(`Successfully delivered to Slack: ${slackMessage.text}`);
         } catch (slackError) {
           logger.error(`Slack delivery failed: ${slackError}`);
@@ -1028,7 +1029,7 @@ export const runCollection = onRequest({
 // 日次レポート配信API
 export const deliverDailyReport = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
-  secrets: [webAppUrl, slackWebhookUrl, openaiApiKey, openaiApiUrl]
+  secrets: [webAppUrl, slackBotToken, openaiApiKey, openaiApiUrl]
 }, async (req, res) => {
   try {
     const { date } = req.body;
@@ -1127,45 +1128,25 @@ export const deliverDailyReport = onRequest({
 
     // Slack送信
     // エラー時メンション設定を読み込み
-    let mention = '';
     try {
-      const settingsDoc = await db.collection("settings").doc("slack").get();
-      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
-      if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
+      await db.collection("settings").doc("slack").get();
     } catch {}
 
-    // 設定の参照（Webhook/メンション）
+    // 設定の参照（メンション/チャンネル）
     let mentionPrefix = '';
-    let webhook = slackWebhookUrl.value();
-    try {
-      const settingsDoc = await db.collection("settings").doc("slack").get();
-      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
-      if (settings?.deliveryMentionUserId) mentionPrefix = `<@${settings.deliveryMentionUserId}> `;
-      if (settings?.webhookUrl) webhook = settings.webhookUrl;
-    } catch {}
+    const settingsDoc = await db.collection("settings").doc("slack").get();
+    const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+    if (settings?.deliveryMentionUserId) mentionPrefix = `<@${settings.deliveryMentionUserId}> `;
+    if (!settings?.channelId) throw new Error('channelId not configured');
+    if (mentionPrefix) slackMessage.blocks.unshift({ type: 'section', text: { type: 'mrkdwn', text: `${mentionPrefix}` } });
 
-    // 本文先頭にメンションを付与（任意）
-    if (mentionPrefix) {
-      slackMessage.blocks.unshift({ type: 'section', text: { type: 'mrkdwn', text: `${mentionPrefix}` } });
-    }
-
-    const response = await fetch(webhook, {
+    const r = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(slackMessage)
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${slackBotToken.value()}` },
+      body: JSON.stringify({ channel: settings.channelId, text: slackMessage.text, blocks: slackMessage.blocks })
     });
-
-    if (!response.ok) {
-      // エラー時にメンション付き通知を試行
-      try {
-        await fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: `${mention}日次レポート配信に失敗しました（${response.status} ${response.statusText}）` })
-        });
-      } catch {}
-      throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
-    }
+    const data = await r.json();
+    if (!data.ok) throw new Error(`Slack error: ${data.error}`);
 
     logger.info(`Daily report delivered successfully for ${targetDate}`);
 
@@ -1282,48 +1263,20 @@ export const deliverWeeklyReport = onRequest({
       }
     });
 
-    // Slack送信
-    // 設定の参照（メンション用）
-    let mention = '';
-    try {
-      const settingsDoc = await db.collection("settings").doc("slack").get();
-      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
-      if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
-    } catch {}
-
-    // 設定の参照（Webhook/メンション）
+    // Slack送信（chat.postMessage）
+    const settingsDoc = await db.collection("settings").doc("slack").get();
+    const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
     let mentionPrefix = '';
-    let webhook = slackWebhookUrl.value();
-    try {
-      const settingsDoc = await db.collection("settings").doc("slack").get();
-      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
-      if (settings?.deliveryMentionUserId) mentionPrefix = `<@${settings.deliveryMentionUserId}> `;
-      if (settings?.webhookUrl) webhook = settings.webhookUrl;
-    } catch {}
-
-    if (mentionPrefix) {
-      slackMessage.blocks.unshift({ type: 'section', text: { type: 'mrkdwn', text: `${mentionPrefix}` } });
-    }
-
-    const response = await fetch(webhook, {
+    if (settings?.deliveryMentionUserId) mentionPrefix = `<@${settings.deliveryMentionUserId}> `;
+    if (mentionPrefix) slackMessage.blocks.unshift({ type: 'section', text: { type: 'mrkdwn', text: `${mentionPrefix}` } });
+    if (!settings?.channelId) throw new Error('channelId not configured');
+    const r = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(slackMessage)
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${slackBotToken.value()}` },
+      body: JSON.stringify({ channel: settings.channelId, text: slackMessage.text, blocks: slackMessage.blocks })
     });
-
-    if (!response.ok) {
-      // エラー時にメンション付き通知を試行
-      try {
-        await fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: `${mention}週次レポート配信に失敗しました（${response.status} ${response.statusText}）` })
-        });
-      } catch {}
-      throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
-    }
+    const data = await r.json();
+    if (!data.ok) throw new Error(`Slack error: ${data.error}`);
 
     logger.info(`Weekly report delivered successfully for week starting ${targetWeekStart}`);
 
@@ -1334,19 +1287,18 @@ export const deliverWeeklyReport = onRequest({
 
   } catch (error) {
     logger.error("Error in weekly report delivery:", (error as any)?.stack || error);
-    // 設定からエラーメンションとWebhookを取得して通知
+    // 設定からエラーメンション取得して通知
     try {
-      let mention = '';
-      let webhook = slackWebhookUrl.value();
       const settingsDoc = await db.collection("settings").doc("slack").get();
       const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
-      if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
-      if (settings?.webhookUrl) webhook = settings.webhookUrl;
-      await fetch(webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `${mention}週次レポート配信に失敗しました。詳細: ${((error as any)?.message || String(error)).slice(0, 300)}` })
-      });
+      const mention = settings?.errorMentionUserId ? `<@${settings.errorMentionUserId}> ` : '';
+      if (settings?.channelId) {
+        await fetch('https://slack.com/api/chat.postMessage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${slackBotToken.value()}` },
+          body: JSON.stringify({ channel: settings.channelId, text: `${mention}週次レポート配信に失敗しました。詳細: ${((error as any)?.message || String(error)).slice(0, 300)}` })
+        });
+      }
     } catch {}
     res.status(500).json({ 
       success: false, 
