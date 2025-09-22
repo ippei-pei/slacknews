@@ -54,6 +54,13 @@ interface NewsArticle {
   createdAt: Date;
 }
 
+// Slack設定の型
+interface SlackSettings {
+  channelName: string;           // 表示用（実際の配信先はSecretのWebhook）
+  errorMentionUserId?: string;   // 例: U123ABCDEF（<@...>でメンション）
+  updatedAt: Date;
+}
+
 // RSSフィード収集関数
 async function collectRSSFeed(company: any) {
   try {
@@ -428,6 +435,48 @@ export const getCompanies = onRequest({
   } catch (error) {
     logger.error("Error fetching companies:", error);
     res.status(500).json({ success: false, error: "Failed to fetch companies" });
+  }
+});
+
+// Slack設定取得API
+export const getSlackSettings = onRequest({
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+  secrets: [webAppUrl]
+}, async (req, res) => {
+  try {
+    const doc = await db.collection("settings").doc("slack").get();
+    if (!doc.exists) {
+      res.json({ success: true, data: null });
+      return;
+    }
+    res.json({ success: true, data: doc.data() });
+  } catch (error) {
+    logger.error("Error fetching slack settings:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch slack settings" });
+  }
+});
+
+// Slack設定更新API
+export const updateSlackSettings = onRequest({
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+  secrets: [webAppUrl]
+}, async (req, res) => {
+  try {
+    const { channelName, errorMentionUserId } = req.body || {};
+    if (!channelName) {
+      res.status(400).json({ success: false, error: "channelName is required" });
+      return;
+    }
+    const payload: SlackSettings = {
+      channelName,
+      errorMentionUserId: errorMentionUserId || null,
+      updatedAt: new Date(),
+    } as any;
+    await db.collection("settings").doc("slack").set(payload, { merge: true });
+    res.json({ success: true, data: payload });
+  } catch (error) {
+    logger.error("Error updating slack settings:", error);
+    res.status(500).json({ success: false, error: "Failed to update slack settings" });
   }
 });
 
@@ -1009,6 +1058,14 @@ export const deliverDailyReport = onRequest({
     }
 
     // Slack送信
+    // エラー時メンション設定を読み込み
+    let mention = '';
+    try {
+      const settingsDoc = await db.collection("settings").doc("slack").get();
+      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+      if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
+    } catch {}
+
     const response = await fetch(slackWebhookUrl.value(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1016,6 +1073,14 @@ export const deliverDailyReport = onRequest({
     });
 
     if (!response.ok) {
+      // エラー時にメンション付き通知を試行
+      try {
+        await fetch(slackWebhookUrl.value(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: `${mention}日次レポート配信に失敗しました（${response.status} ${response.statusText}）` })
+        });
+      } catch {}
       throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
     }
 
@@ -1125,6 +1190,14 @@ export const deliverWeeklyReport = onRequest({
     });
 
     // Slack送信
+    // 設定の参照（メンション用）
+    let mention = '';
+    try {
+      const settingsDoc = await db.collection("settings").doc("slack").get();
+      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+      if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
+    } catch {}
+
     const response = await fetch(slackWebhookUrl.value(), {
       method: 'POST',
       headers: {
@@ -1134,6 +1207,14 @@ export const deliverWeeklyReport = onRequest({
     });
 
     if (!response.ok) {
+      // エラー時にメンション付き通知を試行
+      try {
+        await fetch(slackWebhookUrl.value(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: `${mention}週次レポート配信に失敗しました（${response.status} ${response.statusText}）` })
+        });
+      } catch {}
       throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
     }
 
