@@ -15,6 +15,7 @@ const webAppUrl = defineSecret("web-app-url");
 const openaiApiUrl = defineSecret("openai-api-url");
 const googleNewsBaseUrl = defineSecret("google-news-base-url");
 const slackWebhookUrl = defineSecret("SLACK_WEBHOOK_URL");
+const slackBotToken = defineSecret("SLACK_BOT_TOKEN");
 
 // Firebase Admin SDK を初期化
 initializeApp();
@@ -57,6 +58,7 @@ interface NewsArticle {
 // Slack設定の型
 interface SlackSettings {
   channelName: string;           // 表示用（実際の配信先はSecretのWebhook）
+  channelId?: string;            // chat.postMessage 用
   deliveryMentionUserId?: string; // 配信時に先頭へ付与（任意）
   errorMentionUserId?: string;   // 例: U123ABCDEF（<@...>でメンション）
   webhookUrl?: string;           // 画面で登録されたWebhook（あれば優先使用）
@@ -464,13 +466,14 @@ export const updateSlackSettings = onRequest({
   secrets: [webAppUrl]
 }, async (req, res) => {
   try {
-    const { channelName, deliveryMentionUserId, errorMentionUserId, webhookUrl } = req.body || {};
+    const { channelName, channelId, deliveryMentionUserId, errorMentionUserId, webhookUrl } = req.body || {};
     if (!channelName) {
       res.status(400).json({ success: false, error: "channelName is required" });
       return;
     }
     const payload: SlackSettings = {
       channelName,
+      channelId: channelId || null,
       deliveryMentionUserId: deliveryMentionUserId || null,
       errorMentionUserId: errorMentionUserId || null,
       webhookUrl: webhookUrl || null,
@@ -484,6 +487,67 @@ export const updateSlackSettings = onRequest({
   }
 });
 
+// Slackチャンネル一覧API
+export const listSlackChannels = onRequest({
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+  secrets: [slackBotToken]
+}, async (req, res) => {
+  try {
+    const token = slackBotToken.value();
+    let url = 'https://slack.com/api/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel';
+    const channels: any[] = [];
+    while (url) {
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await r.json();
+      if (!data.ok) throw new Error(`Slack API error: ${data.error}`);
+      channels.push(...data.channels);
+      const cursor = data.response_metadata?.next_cursor;
+      url = cursor ? `https://slack.com/api/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel&cursor=${encodeURIComponent(cursor)}` : '';
+    }
+    res.json({ success: true, data: channels.map((c: any) => ({ id: c.id, name: `#${c.name}`, is_private: c.is_private })) });
+  } catch (e) {
+    logger.error('listSlackChannels failed', e);
+    res.status(500).json({ success: false, error: 'Failed to list channels' });
+  }
+});
+
+// Slackチャンネルメンバー一覧API
+export const listSlackChannelMembers = onRequest({
+  cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
+  secrets: [slackBotToken]
+}, async (req, res) => {
+  try {
+    const token = slackBotToken.value();
+    const { channelId } = req.query as any;
+    if (!channelId) { res.status(400).json({ success: false, error: 'channelId is required' }); return; }
+    let url = `https://slack.com/api/conversations.members?channel=${encodeURIComponent(channelId)}&limit=200`;
+    const memberIds: string[] = [];
+    while (url) {
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await r.json();
+      if (!data.ok) throw new Error(`Slack API error: ${data.error}`);
+      memberIds.push(...data.members);
+      const cursor = data.response_metadata?.next_cursor;
+      url = cursor ? `https://slack.com/api/conversations.members?channel=${encodeURIComponent(channelId)}&limit=200&cursor=${encodeURIComponent(cursor)}` : '';
+    }
+    // users.info は個別に呼ぶ（数が多い場合は users.list に変更検討）
+    const members: any[] = [];
+    for (const uid of memberIds.slice(0, 500)) {
+      const ur = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(uid)}`, { headers: { Authorization: `Bearer ${token}` } });
+      const u = await ur.json();
+      if (u.ok) {
+        const profile = u.user.profile;
+        members.push({ id: u.user.id, name: u.user.name, display_name: profile.display_name || profile.real_name || u.user.name });
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    res.json({ success: true, data: members });
+    return;
+  } catch (e) {
+    logger.error('listSlackChannelMembers failed', e);
+    res.status(500).json({ success: false, error: 'Failed to list channel members' });
+  }
+});
 // 企業追加API
 export const addCompany = onRequest({ 
   cors: ["http://localhost:3000", "http://localhost:3001", "https://slack-news-63e2e.web.app"],
