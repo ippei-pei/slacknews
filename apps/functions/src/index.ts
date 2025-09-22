@@ -57,11 +57,10 @@ interface NewsArticle {
 
 // Slack設定の型
 interface SlackSettings {
-  channelName: string;           // 表示用（実際の配信先はSecretのWebhook）
+  channelName: string;           // 表示用
   channelId?: string;            // chat.postMessage 用
   deliveryMentionUserId?: string; // 配信時に先頭へ付与（任意）
   errorMentionUserId?: string;   // 例: U123ABCDEF（<@...>でメンション）
-  webhookUrl?: string;           // 画面で登録されたWebhook（あれば優先使用）
   updatedAt: Date;
 }
 
@@ -466,7 +465,7 @@ export const updateSlackSettings = onRequest({
   secrets: [webAppUrl]
 }, async (req, res) => {
   try {
-    const { channelName, channelId, deliveryMentionUserId, errorMentionUserId, webhookUrl } = req.body || {};
+    const { channelName, channelId, deliveryMentionUserId, errorMentionUserId } = req.body || {};
     if (!channelName) {
       res.status(400).json({ success: false, error: "channelName is required" });
       return;
@@ -476,7 +475,6 @@ export const updateSlackSettings = onRequest({
       channelId: channelId || null,
       deliveryMentionUserId: deliveryMentionUserId || null,
       errorMentionUserId: errorMentionUserId || null,
-      webhookUrl: webhookUrl || null,
       updatedAt: new Date(),
     } as any;
     await db.collection("settings").doc("slack").set(payload, { merge: true });

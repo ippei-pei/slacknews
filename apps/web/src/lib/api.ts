@@ -44,9 +44,9 @@ export interface ApiResponse<T> {
 
 export interface SlackSettings {
   channelName: string;
+  channelId?: string | null;
   deliveryMentionUserId?: string | null;
   errorMentionUserId?: string | null;
-  webhookUrl?: string | null;
   updatedAt?: Date | string;
 }
 
@@ -290,5 +290,27 @@ export async function updateSlackSettings(payload: SlackSettings): Promise<ApiRe
     return await response.json();
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+// Slackチャンネル・メンバー一覧取得
+export interface SlackChannel { id: string; name: string; is_private?: boolean }
+export interface SlackMember { id: string; name?: string; display_name?: string }
+
+export async function listSlackChannels(): Promise<ApiResponse<SlackChannel[]>> {
+  try {
+    const r = await fetch(`${API_BASE}/listSlackChannels`);
+    return await r.json();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
+}
+
+export async function listSlackChannelMembers(channelId: string): Promise<ApiResponse<SlackMember[]>> {
+  try {
+    const r = await fetch(`${API_BASE}/listSlackChannelMembers?channelId=${encodeURIComponent(channelId)}`);
+    return await r.json();
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : 'Unknown error' };
   }
 }
