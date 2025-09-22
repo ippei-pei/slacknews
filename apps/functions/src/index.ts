@@ -14,7 +14,7 @@ const openaiApiKey = defineSecret("openai-api-key");
 const webAppUrl = defineSecret("web-app-url");
 const openaiApiUrl = defineSecret("openai-api-url");
 const googleNewsBaseUrl = defineSecret("google-news-base-url");
-const slackWebhookUrl = defineSecret("slack-webhook-url");
+const slackWebhookUrl = defineSecret("SLACK_WEBHOOK_URL");
 
 // Firebase Admin SDK を初期化
 initializeApp();
