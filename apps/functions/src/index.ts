@@ -263,7 +263,7 @@ async function translateToJapanese(text: string): Promise<string> {
 
 
 // 【テスト用】Google Newsから直近7日（当日含む）をJSTで分割し、各日5件以上を目標に収集
-async function collectTestRandomGoogleNews(minPerDay: number = 5) {
+async function collectTestRandomGoogleNews(minPerDay: number = 5): Promise<number> {
   try {
     const jstOffsetMs = 9 * 60 * 60 * 1000; // JST(+9:00)
     const baseNow = new Date();
@@ -281,6 +281,7 @@ async function collectTestRandomGoogleNews(minPerDay: number = 5) {
     existing.docs.forEach(d => existingUrls.add((d.data() as any).url));
 
     // 7日分ループ（当日→過去へ）
+    let totalAdded = 0;
     for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
       const jstDay = new Date(baseNow.getTime() - dayIdx * 24 * 60 * 60 * 1000);
       const ymd = new Date(jstDay.getTime() + jstOffsetMs).toISOString().split('T')[0];
@@ -347,10 +348,15 @@ async function collectTestRandomGoogleNews(minPerDay: number = 5) {
         };
         await db.collection('news').add(newsData);
         existingUrls.add(it.link || '');
+        totalAdded++;
       }
+      logger.info(`[RandomCollect] Saved for ${ymd}: ${collectedForDay.length}`);
     }
+    logger.info(`[RandomCollect] Total added: ${totalAdded}`);
+    return totalAdded;
   } catch (error) {
     logger.error('Error collecting test random Google News:', error);
+    return 0;
   }
 }
 
@@ -970,10 +976,9 @@ export const runCollection = onRequest({
       }
     }
     
-    // 【テスト用】ランダム記事収集（企業非依存、20件）
-    // テスト目的で、過去一週間のGoogle Newsからランダムに記事を収集
-    await collectTestRandomGoogleNews(20);
-    collectedCount++;
+    // 【テスト用】Google Newsランダム収集（各日5件以上）
+    const added = await collectTestRandomGoogleNews(5);
+    logger.info(`RandomCollect added: ${added}`);
 
     res.json({ 
       success: true, 
