@@ -262,124 +262,95 @@ async function translateToJapanese(text: string): Promise<string> {
 }
 
 
-// 【テスト用】Google Newsから過去一週間のランダム記事を取得する関数
-// 企業非依存で、テスト目的の記事収集を行う
-async function collectTestRandomGoogleNews(count: number = config.test.randomArticleCount) {
+// 【テスト用】Google Newsから直近7日（当日含む）をJSTで分割し、各日5件以上を目標に収集
+async function collectTestRandomGoogleNews(minPerDay: number = 5) {
   try {
-    logger.info(`Collecting ${count} random Google News articles from the past week`);
-    
-    // 過去一週間の日付範囲を取得
-    const today = new Date();
-    const oneWeekAgo = new Date(today.getTime() - config.time.pastWeekDays * 24 * 60 * 60 * 1000);
-    const todayStr = today.toISOString().split('T')[0];
-    const oneWeekAgoStr = oneWeekAgo.toISOString().split('T')[0];
-    
-    logger.info(`Searching for articles from ${oneWeekAgoStr} to ${todayStr}`);
-    
-    // 様々なキーワードでGoogle Newsを検索（過去一週間）
-    const keywords = [
-      'technology', 'AI', 'artificial intelligence', 'startup', 'innovation',
-      'software', 'hardware', 'mobile', 'internet', 'cybersecurity',
-      'blockchain', 'cryptocurrency', 'fintech', 'ecommerce', 'social media',
-      'tech news', 'breaking news', 'latest technology', 'digital transformation',
-      'cloud computing', 'machine learning', 'data science', 'programming'
-    ];
-    
-    let allArticles: any[] = [];
-    
-    // 複数のキーワードで検索して記事を集める
-    for (let i = 0; i < Math.min(keywords.length, 8); i++) {
-      const keyword = keywords[i];
-      const googleNewsBaseUrlValue = googleNewsBaseUrl.value();
-      const googleNewsUrl = `${googleNewsBaseUrlValue}?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en&when:7d`;
-      
-      logger.info(`Searching with keyword: ${keyword}`);
-      
-      try {
-        const response = await fetch(googleNewsUrl);
-        const xmlText = await response.text();
-        
-        const items = parseRSSFeed(xmlText);
-        logger.info(`Found ${items.length} articles for keyword: ${keyword}`);
-        
-        // 過去一週間の記事をフィルタリング
-        const recentItems = items.filter(item => {
-          if (!item.pubDate) return false;
-          const itemDate = new Date(item.pubDate);
-          return itemDate >= oneWeekAgo && itemDate <= today;
-        });
-        
-        logger.info(`Found ${recentItems.length} recent articles for keyword: ${keyword}`);
-        allArticles = allArticles.concat(recentItems);
-        
-        // 少し待機してAPI制限を避ける
-        await new Promise(resolve => setTimeout(resolve, config.ai.apiWaitTime));
-        
-      } catch (error) {
-        logger.error(`Error fetching articles for keyword ${keyword}:`, error);
-      }
-    }
-    
-    // 重複を除去（URLベース）
-    const uniqueArticles = allArticles.filter((article, index, self) => 
-      index === self.findIndex(a => a.link === article.link)
-    );
-    
-    logger.info(`Total unique recent articles found: ${uniqueArticles.length}`);
-    
-    // ランダムに記事を選択（最大count件）
-    const shuffledItems = uniqueArticles.sort(() => 0.5 - Math.random());
-    const selectedItems = shuffledItems.slice(0, count);
-    
-    logger.info(`Selected ${selectedItems.length} random articles`);
-    
-    // 既存のテスト用ランダム記事をチェックして重複を避ける
-    const existingUrls = new Set<string>();
-    const existingNewsSnapshot = await db.collection("news")
-      .where("category", "==", config.test.testCategoryName)
-      .get();
-    
-    existingNewsSnapshot.docs.forEach(doc => {
-      const data = doc.data() as NewsArticle;
-      existingUrls.add(data.url);
-    });
-    
-    logger.info(`Found ${existingUrls.size} existing test random articles`);
-    
-    let addedCount = 0;
-    for (const item of selectedItems) {
-      // 重複チェック（URLベース）
-      if (existingUrls.has(item.link || '')) {
-        logger.info(`Skipped duplicate article: ${item.title}`);
-        continue;
-      }
-      
-      const newsData: Omit<NewsArticle, "id"> = {
-        companyId: config.test.testCompanyId, // テスト用ランダム記事の識別子
-        title: stripHtmlTags(item.title || 'No title'),
-        content: stripHtmlTags(item.description || item.content || ''),
-        url: item.link || '',
-        publishedAt: new Date(item.pubDate || Date.now()),
-        importance: Math.floor(Math.random() * 5) + 1, // ランダム重要度
-        category: config.test.testCategoryName, // テスト用ランダム記事であることを明示
-        summary: stripHtmlTags(item.description || item.content || ''),
-        isDeliveryTarget: true,
-        isTranslated: false,
-        informationAcquisitionDate: new Date(),
-        deliveryStatus: 'pending',
-        createdAt: new Date()
-      };
+    const jstOffsetMs = 9 * 60 * 60 * 1000; // JST(+9:00)
+    const baseNow = new Date();
 
-      await db.collection("news").add(newsData);
-      existingUrls.add(item.link || '');
-      addedCount++;
-      logger.info(`Added test random news: ${item.title}`);
+    // 検索キーワード（一般×テック寄り）
+    const keywordPools: string[][] = [
+      ['technology','tech news','innovation','startup','software','hardware','mobile','internet'],
+      ['AI','artificial intelligence','machine learning','data science','cloud computing'],
+      ['cybersecurity','blockchain','fintech','ecommerce','social media']
+    ];
+
+    // 既存URL（重複保存防止）
+    const existingUrls = new Set<string>();
+    const existing = await db.collection('news').where('category','==',config.test.testCategoryName).get();
+    existing.docs.forEach(d => existingUrls.add((d.data() as any).url));
+
+    // 7日分ループ（当日→過去へ）
+    for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+      const jstDay = new Date(baseNow.getTime() - dayIdx * 24 * 60 * 60 * 1000);
+      const ymd = new Date(jstDay.getTime() + jstOffsetMs).toISOString().split('T')[0];
+
+      // JST日の境界
+      const startJST = new Date(`${ymd}T00:00:00+09:00`);
+      const endJST = new Date(`${ymd}T23:59:59+09:00`);
+
+      logger.info(`[RandomCollect] Target JST day=${ymd}`);
+
+      const collectedForDay: any[] = [];
+      let poolIndex = 0;
+      let attempts = 0;
+      while (collectedForDay.length < minPerDay && attempts < 12) {
+        const pool = keywordPools[poolIndex % keywordPools.length];
+        const keyword = pool[attempts % pool.length];
+        attempts++;
+        poolIndex++;
+
+        try {
+          const base = googleNewsBaseUrl.value();
+          // Google News RSSは厳密な日付指定ができないため、広く取得しpubDateでJST日付にフィルタ
+          const url = `${base}?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en`;
+          const resp = await fetch(url);
+          const xml = await resp.text();
+          const items = parseRSSFeed(xml);
+
+          // JST日付でフィルタ
+          const dayItems = items.filter(it => {
+            if (!it.pubDate) return false;
+            const d = new Date(it.pubDate);
+            return d >= startJST && d <= endJST;
+          });
+
+          for (const it of dayItems) {
+            if (!it.link || existingUrls.has(it.link)) continue;
+            collectedForDay.push(it);
+            if (collectedForDay.length >= minPerDay) break;
+          }
+          await new Promise(r => setTimeout(r, 300));
+        } catch (e) {
+          logger.warn(`[RandomCollect] keyword fetch failed: ${keyword}`);
+        }
+      }
+
+      logger.info(`[RandomCollect] Collected for ${ymd}: ${collectedForDay.length}`);
+
+      // 保存
+      for (const it of collectedForDay) {
+        const newsData: Omit<NewsArticle,'id'> = {
+          companyId: config.test.testCompanyId,
+          title: stripHtmlTags(it.title || 'No title'),
+          content: stripHtmlTags(it.description || it.content || ''),
+          url: it.link || '',
+          publishedAt: new Date(it.pubDate || Date.now()),
+          importance: 3,
+          category: config.test.testCategoryName,
+          summary: stripHtmlTags(it.description || it.content || ''),
+          isDeliveryTarget: true,
+          isTranslated: false,
+          informationAcquisitionDate: new Date(),
+          deliveryStatus: 'pending',
+          createdAt: new Date()
+        };
+        await db.collection('news').add(newsData);
+        existingUrls.add(it.link || '');
+      }
     }
-    
-    logger.info(`Successfully added ${addedCount} new test random articles`);
-    
   } catch (error) {
-    logger.error(`Error collecting test random Google News:`, error);
+    logger.error('Error collecting test random Google News:', error);
   }
 }
 
@@ -1036,10 +1007,9 @@ export const deliverDailyReport = onRequest({
     logger.info(`Starting daily report delivery for ${targetDate}...`);
 
     // 指定日の記事を取得
-    const startOfDay = new Date(targetDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(targetDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    // JST日付境界に統一
+    const startOfDay = new Date(`${targetDate}T00:00:00+09:00`);
+    const endOfDay = new Date(`${targetDate}T23:59:59+09:00`);
 
     const newsSnapshot = await db.collection("news").get();
     const dailyNews = newsSnapshot.docs.filter(doc => {
