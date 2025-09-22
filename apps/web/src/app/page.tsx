@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getCompanies, addCompany, updateCompany, deleteCompany, getNews, runCollection, translateDeliveryTargetNews, deliverNews, cleanupNews, deliverDailyReport, deliverWeeklyReport, Company, NewsArticle } from '@/lib/api';
-import { getSlackSettings, updateSlackSettings, SlackSettings } from '@/lib/api';
+import { getSlackSettings, updateSlackSettings, SlackSettings, listSlackChannels, listSlackChannelMembers, SlackChannel, SlackMember } from '@/lib/api';
 
 export default function Home() {
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -23,6 +23,10 @@ export default function Home() {
   // Slack設定
   const [slackSettings, setSlackSettings] = useState<SlackSettings | null>(null);
   const [savingSlack, setSavingSlack] = useState(false);
+  const [channels, setChannels] = useState<SlackChannel[]>([]);
+  const [members, setMembers] = useState<SlackMember[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+  const [loadingMembers, setLoadingMembers] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -59,7 +63,7 @@ export default function Home() {
       // Slack設定読込
       const slackRes = await getSlackSettings();
       if (slackRes.success) {
-        setSlackSettings(slackRes.data || { channelName: '', webhookUrl: '', deliveryMentionUserId: '', errorMentionUserId: '' });
+        setSlackSettings(slackRes.data || { channelId: '', channelName: '', deliveryMentionUserId: '', errorMentionUserId: '' });
       }
     } catch (error) {
       console.error('💥 Error loading data:', error);
@@ -171,9 +175,15 @@ export default function Home() {
   const handleSaveSlackSettings = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!slackSettings) return;
+    if (!slackSettings.channelId) { setMessage({ type: 'error', text: '配信先チャンネルを選択してください' }); return; }
     setSavingSlack(true);
     try {
-      const res = await updateSlackSettings(slackSettings);
+      const res = await updateSlackSettings({
+        channelId: slackSettings.channelId,
+        channelName: slackSettings.channelName || '',
+        deliveryMentionUserId: slackSettings.deliveryMentionUserId || '',
+        errorMentionUserId: slackSettings.errorMentionUserId || ''
+      } as any);
       if (res.success) {
         setMessage({ type: 'success', text: 'Slack設定を保存しました' });
       } else {
@@ -184,6 +194,25 @@ export default function Home() {
     } finally {
       setSavingSlack(false);
     }
+  };
+
+  const handleFetchChannels = async () => {
+    setLoadingChannels(true);
+    const r = await listSlackChannels();
+    if (r.success) setChannels(r.data || []);
+    else setMessage({ type: 'error', text: r.error || 'チャンネル取得に失敗しました' });
+    setLoadingChannels(false);
+  };
+
+  const handleChannelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const [id, name] = e.target.value.split('|');
+    setSlackSettings(prev => ({ channelName: name || '', channelId: id || '', deliveryMentionUserId: prev?.deliveryMentionUserId || '', errorMentionUserId: prev?.errorMentionUserId || '', updatedAt: prev?.updatedAt }));
+    // メンバー取得
+    setLoadingMembers(true);
+    const r = await listSlackChannelMembers(id);
+    if (r.success) setMembers(r.data || []);
+    else setMessage({ type: 'error', text: r.error || 'メンバー取得に失敗しました' });
+    setLoadingMembers(false);
   };
 
   // 週の開始日を取得（月曜日を週の開始とする）
@@ -721,48 +750,42 @@ export default function Home() {
           </div>
           <div className="card-body">
             <form onSubmit={handleSaveSlackSettings}>
-              <div className="mb-2">
-                <label className="form-label">配信先チャンネル名（表示用）</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  value={slackSettings?.channelName || ''}
-                  onChange={(e) => setSlackSettings(prev => ({ ...(prev || {}), channelName: e.target.value }))}
-                  placeholder="#competitor-news など"
-                  required
-                />
+                      <div className="mb-2 d-flex gap-2">
+                        <button type="button" className="btn btn-outline-secondary btn-sm" onClick={handleFetchChannels} disabled={loadingChannels}>
+                          {loadingChannels ? '取得中...' : 'チャンネルを取得'}
+                        </button>
+                        {channels.length > 0 && (
+                          <select className="form-select form-select-sm w-auto" onChange={handleChannelChange} defaultValue="">
+                            <option value="" disabled>チャンネルを選択</option>
+                            {channels.map(ch => (
+                              <option key={ch.id} value={`${ch.id}|${ch.name}`}>{ch.name}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                      {/* 配信先チャンネル名入力は不要。選択リストで設定 */}
+                      <div className="mb-2">
+                        <label className="form-label mb-0">配信メンション先</label>
+                        {members.length > 0 && (
+                          <select className="form-select mb-2" onChange={(e) => setSlackSettings(prev => ({ channelName: prev?.channelName || '', channelId: prev?.channelId || '', deliveryMentionUserId: e.target.value || '', errorMentionUserId: prev?.errorMentionUserId || '', updatedAt: prev?.updatedAt }))} defaultValue="">
+                            <option value="">選択しない</option>
+                            {members.map(m => (
+                              <option key={m.id} value={m.id}>{m.display_name || m.name || m.id}</option>
+                            ))}
+                          </select>
+                        )}
+                        <small className="text-muted">設定すると配信メッセージの先頭に &lt;@UserID&gt; を付与します。</small>
               </div>
               <div className="mb-2">
-                <label className="form-label">Webhook URL（優先使用）</label>
-                <input
-                  type="url"
-                  className="form-control"
-                  value={slackSettings?.webhookUrl || ''}
-                  onChange={(e) => setSlackSettings(prev => ({ ...(prev || {}), webhookUrl: e.target.value }))}
-                  placeholder="https://hooks.slack.com/services/..."
-                />
-                <small className="text-muted">未入力時はSecret Managerの値を使用します。</small>
-              </div>
-              <div className="mb-2">
-                <label className="form-label">配信メンション先（User ID）</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  value={slackSettings?.deliveryMentionUserId || ''}
-                  onChange={(e) => setSlackSettings(prev => ({ ...(prev || {}), deliveryMentionUserId: e.target.value }))}
-                  placeholder="U123ABCDEF"
-                />
-                <small className="text-muted">設定すると配信メッセージの先頭に &lt;@UserID&gt; を付与します。</small>
-              </div>
-              <div className="mb-2">
-                <label className="form-label">エラー時メンション先（User ID）</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  value={slackSettings?.errorMentionUserId || ''}
-                  onChange={(e) => setSlackSettings(prev => ({ ...(prev || {}), errorMentionUserId: e.target.value }))}
-                  placeholder="U123ABCDEF"
-                />
+                        <label className="form-label">エラー時メンション先</label>
+                        {members.length > 0 && (
+                          <select className="form-select mb-2" onChange={(e) => setSlackSettings(prev => ({ channelName: prev?.channelName || '', channelId: prev?.channelId || '', deliveryMentionUserId: prev?.deliveryMentionUserId || '', errorMentionUserId: e.target.value || '', updatedAt: prev?.updatedAt }))} defaultValue="">
+                            <option value="">選択しない</option>
+                            {members.map(m => (
+                              <option key={m.id} value={m.id}>{m.display_name || m.name || m.id}</option>
+                            ))}
+                          </select>
+                        )}
               </div>
               <div className="d-flex justify-content-end">
                 <button type="submit" className="btn btn-primary" disabled={savingSlack}>
