@@ -1144,11 +1144,21 @@ export const deliverWeeklyReport = onRequest({
 
     // （LLM生成に切り替えたため会社別グルーピングは不要）
 
-    // LLMで文生成
-    const llm = await generateWeeklyReportWithLLM(weeklyNews);
-    const competitorSummary = llm.competitorSummary;
-    const companySummaries = llm.companySummaries;
-    const strategicAction = llm.strategicAction;
+    // LLMで文生成（失敗時はフォールバック）
+    let competitorSummary = '';
+    let companySummaries: any[] = [];
+    let strategicAction = '';
+    try {
+      const llm = await generateWeeklyReportWithLLM(weeklyNews);
+      competitorSummary = llm.competitorSummary;
+      companySummaries = llm.companySummaries;
+      strategicAction = llm.strategicAction;
+    } catch (llmErr) {
+      logger.error('LLM weekly generation failed:', llmErr);
+      competitorSummary = weeklyNews.length > 0 ? '今週の競合動向については記事をご確認ください。' : '今週は該当する記事がありませんでした。';
+      companySummaries = [];
+      strategicAction = '推奨アクションは取得できませんでした。';
+    }
 
     // 週次レポートメッセージを生成
     const slackMessage = {
@@ -1259,7 +1269,21 @@ export const deliverWeeklyReport = onRequest({
     });
 
   } catch (error) {
-    logger.error("Error in weekly report delivery:", error);
+    logger.error("Error in weekly report delivery:", (error as any)?.stack || error);
+    // 設定からエラーメンションとWebhookを取得して通知
+    try {
+      let mention = '';
+      let webhook = slackWebhookUrl.value();
+      const settingsDoc = await db.collection("settings").doc("slack").get();
+      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+      if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
+      if (settings?.webhookUrl) webhook = settings.webhookUrl;
+      await fetch(webhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: `${mention}週次レポート配信に失敗しました。詳細: ${((error as any)?.message || String(error)).slice(0, 300)}` })
+      });
+    } catch {}
     res.status(500).json({ 
       success: false, 
       error: "Failed to deliver weekly report" 
