@@ -65,4 +65,16 @@ var reports_1 = require("./routes/reports");
 Object.defineProperty(exports, "deliverNews", { enumerable: true, get: function () { return reports_1.deliverNews; } });
 Object.defineProperty(exports, "deliverDailyReport", { enumerable: true, get: function () { return reports_1.deliverDailyReport; } });
 Object.defineProperty(exports, "deliverWeeklyReport", { enumerable: true, get: function () { return reports_1.deliverWeeklyReport; } });
+// export {
+//   // テスト用
+//   testRandomCollection
+// } from './routes/test-collect';
+// export {
+//   // シンプルテスト用
+//   simpleTest
+// } from './routes/simple-test';
+// export {
+//   // デバッグテスト用
+//   debugTest
+// } from './routes/debug-test';
 //# sourceMappingURL=index.js.map

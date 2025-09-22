@@ -46,7 +46,7 @@ exports.runCollection = (0, https_1.onRequest)(corsOptions, async (req, res) => 
         context_1.logger.info(`RandomCollect added: ${added}`);
         res.json({
             success: true,
-            message: `${companies.length}社から${collectedCount}件の情報収集が完了しました`
+            message: `${companies.length}社から${collectedCount}件の情報収集が完了しました。ランダム記事${added}件を追加しました。`
         });
     }
     catch (error) {

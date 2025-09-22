@@ -42,3 +42,18 @@ export {
   deliverDailyReport,
   deliverWeeklyReport
 } from './routes/reports';
+
+// export {
+//   // テスト用
+//   testRandomCollection
+// } from './routes/test-collect';
+
+// export {
+//   // シンプルテスト用
+//   simpleTest
+// } from './routes/simple-test';
+
+// export {
+//   // デバッグテスト用
+//   debugTest
+// } from './routes/debug-test';

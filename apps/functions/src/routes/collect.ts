@@ -58,7 +58,7 @@ export const runCollection = onRequest(corsOptions, async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: `${companies.length}社から${collectedCount}件の情報収集が完了しました` 
+      message: `${companies.length}社から${collectedCount}件の情報収集が完了しました。ランダム記事${added}件を追加しました。` 
     });
 
   } catch (error) {

@@ -7,8 +7,8 @@ const context_1 = require("../context");
 const config_1 = require("../config");
 const rss_1 = require("../utils/rss");
 const text_1 = require("../utils/text");
-const date_1 = require("../utils/date");
-const context_2 = require("../context");
+// import { toJstStartOfDay, toJstEndOfDay } from '../utils/date'; // 一時的に無効化
+// import { googleNewsBaseUrl } from '../context'; // 一時的に無効化
 /**
  * RSSフィード収集関数
  * @param company 企業情報
@@ -125,65 +125,74 @@ async function collectRedditFeed(company) {
  */
 async function collectTestRandomGoogleNews(minPerDay = 5) {
     try {
-        const jstOffsetMs = 9 * 60 * 60 * 1000; // JST(+9:00)
-        const baseNow = new Date();
-        // 検索キーワード（一般×テック寄り）
-        const keywordPools = [
-            ['technology', 'tech news', 'innovation', 'startup', 'software', 'hardware', 'mobile', 'internet'],
-            ['AI', 'artificial intelligence', 'machine learning', 'data science', 'cloud computing'],
-            ['cybersecurity', 'blockchain', 'fintech', 'ecommerce', 'social media']
-        ];
+        context_1.logger.info(`[RandomCollect] Starting collection with minPerDay=${minPerDay}`);
         // 既存URL（重複保存防止）
+        context_1.logger.info(`[RandomCollect] Loading existing URLs for category: ${config_1.config.test.testCategoryName}`);
         const existingUrls = new Set();
         const existing = await context_1.db.collection('news').where('category', '==', config_1.config.test.testCategoryName).get();
         existing.docs.forEach(d => existingUrls.add(d.data().url));
-        // 7日分ループ（当日→過去へ）
+        context_1.logger.info(`[RandomCollect] Found ${existingUrls.size} existing URLs to avoid duplicates`);
+        // 代替RSSフィードを使用
+        const alternativeFeeds = [
+            'https://feeds.bbci.co.uk/news/technology/rss.xml',
+            'https://rss.cnn.com/rss/edition_technology.rss',
+            'https://feeds.feedburner.com/oreilly/radar/atom'
+        ];
         let totalAdded = 0;
-        for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
-            const jstDay = new Date(baseNow.getTime() - dayIdx * 24 * 60 * 60 * 1000);
-            const ymd = new Date(jstDay.getTime() + jstOffsetMs).toISOString().split('T')[0];
-            // JST日の境界
-            const startJST = (0, date_1.toJstStartOfDay)(ymd);
-            const endJST = (0, date_1.toJstEndOfDay)(ymd);
-            context_1.logger.info(`[RandomCollect] Target JST day=${ymd}`);
-            const collectedForDay = [];
-            let poolIndex = 0;
-            let attempts = 0;
-            while (collectedForDay.length < minPerDay && attempts < 12) {
-                const pool = keywordPools[poolIndex % keywordPools.length];
-                const keyword = pool[attempts % pool.length];
-                attempts++;
-                poolIndex++;
-                try {
-                    const base = context_2.googleNewsBaseUrl.value();
-                    // Google News RSSは厳密な日付指定ができないため、広く取得しpubDateでJST日付にフィルタ
-                    const url = `${base}?q=${encodeURIComponent(keyword)}&hl=en-US&gl=US&ceid=US:en`;
-                    const resp = await fetch(url);
-                    const xml = await resp.text();
-                    const items = (0, rss_1.parseRSSFeed)(xml);
-                    // JST日付でフィルタ
-                    const dayItems = items.filter(it => {
-                        if (!it.pubDate)
-                            return false;
-                        const d = new Date(it.pubDate);
-                        return d >= startJST && d <= endJST;
-                    });
-                    for (const it of dayItems) {
-                        if (!it.link || existingUrls.has(it.link))
-                            continue;
-                        collectedForDay.push(it);
-                        if (collectedForDay.length >= minPerDay)
-                            break;
+        const allCollectedArticles = [];
+        // 複数のフィードから記事を収集
+        for (let feedIndex = 0; feedIndex < alternativeFeeds.length && allCollectedArticles.length < minPerDay * 7; feedIndex++) {
+            const url = alternativeFeeds[feedIndex];
+            context_1.logger.info(`[RandomCollect] Fetching from feed ${feedIndex + 1}/${alternativeFeeds.length}: ${url}`);
+            try {
+                const resp = await fetch(url);
+                context_1.logger.info(`[RandomCollect] Response status: ${resp.status}`);
+                if (!resp.ok) {
+                    context_1.logger.warn(`[RandomCollect] HTTP error ${resp.status}: ${resp.statusText}`);
+                    continue;
+                }
+                const xml = await resp.text();
+                context_1.logger.info(`[RandomCollect] XML length: ${xml.length} chars`);
+                const items = (0, rss_1.parseRSSFeed)(xml);
+                context_1.logger.info(`[RandomCollect] Parsed ${items.length} RSS items`);
+                if (items.length > 0) {
+                    context_1.logger.info(`[RandomCollect] First item: ${items[0].title}`);
+                }
+                // 記事をグローバルリストに追加
+                for (const it of items) {
+                    if (!it.link) {
+                        context_1.logger.debug(`[RandomCollect] Skipping item without link: ${it.title}`);
+                        continue;
                     }
-                    await new Promise(r => setTimeout(r, 300));
+                    if (existingUrls.has(it.link)) {
+                        context_1.logger.debug(`[RandomCollect] Skipping duplicate URL: ${it.link}`);
+                        continue;
+                    }
+                    // 既に収集済みでないかチェック
+                    if (!allCollectedArticles.some(existing => existing.link === it.link)) {
+                        allCollectedArticles.push(it);
+                        existingUrls.add(it.link);
+                        context_1.logger.info(`[RandomCollect] Added item ${allCollectedArticles.length}: ${it.title}`);
+                    }
+                    // 十分な記事が集まったら終了
+                    if (allCollectedArticles.length >= minPerDay * 7) {
+                        context_1.logger.info(`[RandomCollect] Reached target: ${allCollectedArticles.length} articles`);
+                        break;
+                    }
                 }
-                catch (e) {
-                    context_1.logger.warn(`[RandomCollect] keyword fetch failed: ${keyword}`);
-                }
+                await new Promise(r => setTimeout(r, 1000)); // レート制限対策
             }
-            context_1.logger.info(`[RandomCollect] Collected for ${ymd}: ${collectedForDay.length}`);
-            // 保存
-            for (const it of collectedForDay) {
+            catch (e) {
+                context_1.logger.error(`[RandomCollect] Feed fetch failed for "${url}":`, e);
+            }
+        }
+        context_1.logger.info(`[RandomCollect] Collection summary: ${allCollectedArticles.length} articles collected`);
+        // 保存処理
+        context_1.logger.info(`[RandomCollect] Starting to save ${allCollectedArticles.length} articles`);
+        for (let i = 0; i < allCollectedArticles.length; i++) {
+            const it = allCollectedArticles[i];
+            try {
+                context_1.logger.info(`[RandomCollect] Saving article ${i + 1}/${allCollectedArticles.length}: ${it.title}`);
                 const newsData = {
                     companyId: config_1.config.test.testCompanyId,
                     title: (0, text_1.stripHtmlTags)(it.title || 'No title'),
@@ -200,12 +209,14 @@ async function collectTestRandomGoogleNews(minPerDay = 5) {
                     createdAt: new Date()
                 };
                 await context_1.db.collection('news').add(newsData);
-                existingUrls.add(it.link || '');
                 totalAdded++;
+                context_1.logger.info(`[RandomCollect] Successfully saved article ${totalAdded}: ${newsData.title}`);
             }
-            context_1.logger.info(`[RandomCollect] Saved for ${ymd}: ${collectedForDay.length}`);
+            catch (saveError) {
+                context_1.logger.error(`[RandomCollect] Failed to save article ${i + 1}: ${it.title}`, saveError);
+            }
         }
-        context_1.logger.info(`[RandomCollect] Total added: ${totalAdded}`);
+        context_1.logger.info(`[RandomCollect] Collection completed. Total added: ${totalAdded}`);
         return totalAdded;
     }
     catch (error) {

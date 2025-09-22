@@ -11,7 +11,7 @@ const corsOptions = {
 // ニュース記事一覧取得API（配信対象の記事のみ）
 exports.getNews = (0, https_1.onRequest)(corsOptions, async (req, res) => {
     try {
-        const { companyId, limit = 10 } = req.query;
+        const { companyId, limit = 1000 } = req.query; // デフォルト制限を大幅に増やす
         let newsSnapshot;
         if (companyId) {
             newsSnapshot = await context_1.db.collection("news")
@@ -25,8 +25,9 @@ exports.getNews = (0, https_1.onRequest)(corsOptions, async (req, res) => {
             const data = doc.data();
             return Object.assign({ id: doc.id }, data);
         });
-        // 配信対象の記事のみをフィルタリング
-        const deliveryTargetNews = news.filter(article => article.isDeliveryTarget === true);
+        // 配信対象の記事のみをフィルタリング（一時的に無効化）
+        // const deliveryTargetNews = news.filter(article => article.isDeliveryTarget === true);
+        const deliveryTargetNews = news; // すべての記事を表示
         // 公開日時でソート（クライアント側）
         deliveryTargetNews.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
         // 制限を適用

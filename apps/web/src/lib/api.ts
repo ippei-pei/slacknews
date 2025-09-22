@@ -142,7 +142,7 @@ export async function deleteCompany(companyId: string): Promise<ApiResponse<{ me
 }
 
 // ニュース記事取得
-export async function getNews(companyId?: string, limit: number = 10): Promise<ApiResponse<NewsArticle[]>> {
+export async function getNews(companyId?: string, limit: number = 1000): Promise<ApiResponse<NewsArticle[]>> {
   try {
     const params = new URLSearchParams();
     if (companyId) params.append('companyId', companyId);
