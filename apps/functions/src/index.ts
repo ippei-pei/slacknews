@@ -57,7 +57,9 @@ interface NewsArticle {
 // Slack設定の型
 interface SlackSettings {
   channelName: string;           // 表示用（実際の配信先はSecretのWebhook）
+  deliveryMentionUserId?: string; // 配信時に先頭へ付与（任意）
   errorMentionUserId?: string;   // 例: U123ABCDEF（<@...>でメンション）
+  webhookUrl?: string;           // 画面で登録されたWebhook（あれば優先使用）
   updatedAt: Date;
 }
 
@@ -197,7 +199,7 @@ async function translateToJapanese(text: string): Promise<string> {
     logger.info(`API Key length: ${OPENAI_API_KEY ? OPENAI_API_KEY.length : 0}`);
     logger.info(`API Key prefix: ${OPENAI_API_KEY ? OPENAI_API_KEY.substring(0, 10) + '...' : 'N/A'}`);
     
-    if (!OPENAI_API_KEY) {
+  if (!OPENAI_API_KEY) {
       throw new Error('OpenAI API key is required for translation. Please set openai-api-key secret in Secret Manager.');
     }
 
@@ -233,24 +235,24 @@ async function translateToJapanese(text: string): Promise<string> {
     logger.info(`Response status: ${response.status}`);
     logger.info(`Response headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
 
-    if (!response.ok) {
+  if (!response.ok) {
       const errorText = await response.text();
       logger.error(`OpenAI API error response: ${errorText}`);
       throw new Error(`OpenAI API error: ${response.status} - ${response.statusText} - ${errorText}`);
-    }
+  }
 
-    const data = await response.json();
+  const data = await response.json();
     logger.info(`Response data: ${JSON.stringify(data, null, 2)}`);
     
-    const translatedText = data.choices[0]?.message?.content?.trim();
-    
-    if (!translatedText) {
+  const translatedText = data.choices[0]?.message?.content?.trim();
+  
+  if (!translatedText) {
       logger.error('No translation received from OpenAI API');
-      throw new Error('No translation received from OpenAI API');
-    }
+    throw new Error('No translation received from OpenAI API');
+  }
 
     logger.info(`Translation successful: ${translatedText.substring(0, config.text.maxTitleLength)}...`);
-    return translatedText;
+  return translatedText;
     
   } catch (error) {
     logger.error('Translation error:', error);
@@ -462,14 +464,16 @@ export const updateSlackSettings = onRequest({
   secrets: [webAppUrl]
 }, async (req, res) => {
   try {
-    const { channelName, errorMentionUserId } = req.body || {};
+    const { channelName, deliveryMentionUserId, errorMentionUserId, webhookUrl } = req.body || {};
     if (!channelName) {
       res.status(400).json({ success: false, error: "channelName is required" });
       return;
     }
     const payload: SlackSettings = {
       channelName,
+      deliveryMentionUserId: deliveryMentionUserId || null,
       errorMentionUserId: errorMentionUserId || null,
+      webhookUrl: webhookUrl || null,
       updatedAt: new Date(),
     } as any;
     await db.collection("settings").doc("slack").set(payload, { merge: true });
@@ -620,21 +624,21 @@ export const cleanupNews = onRequest({
     let deletedCount = 0;
     
     for (let i = 0; i < newsSnapshot.docs.length; i += batchSize) {
-      const batch = db.batch();
+    const batch = db.batch();
       const batchDocs = newsSnapshot.docs.slice(i, i + batchSize);
       
       batchDocs.forEach(doc => {
-        batch.delete(doc.ref);
-      });
-      
-      await batch.commit();
+      batch.delete(doc.ref);
+    });
+    
+    await batch.commit();
       deletedCount += batchDocs.length;
       
       logger.info(`Deleted batch: ${deletedCount}/${totalArticles} articles`);
     }
     
     logger.info(`News cleanup completed. Deleted ${deletedCount} articles`);
-    
+
     res.json({
       success: true,
       message: `Successfully deleted ${deletedCount} articles from the database`
@@ -1066,7 +1070,22 @@ export const deliverDailyReport = onRequest({
       if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
     } catch {}
 
-    const response = await fetch(slackWebhookUrl.value(), {
+    // 設定の参照（Webhook/メンション）
+    let mentionPrefix = '';
+    let webhook = slackWebhookUrl.value();
+    try {
+      const settingsDoc = await db.collection("settings").doc("slack").get();
+      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+      if (settings?.deliveryMentionUserId) mentionPrefix = `<@${settings.deliveryMentionUserId}> `;
+      if (settings?.webhookUrl) webhook = settings.webhookUrl;
+    } catch {}
+
+    // 本文先頭にメンションを付与（任意）
+    if (mentionPrefix) {
+      slackMessage.blocks.unshift({ type: 'section', text: { type: 'mrkdwn', text: `${mentionPrefix}` } });
+    }
+
+    const response = await fetch(webhook, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(slackMessage)
@@ -1075,7 +1094,7 @@ export const deliverDailyReport = onRequest({
     if (!response.ok) {
       // エラー時にメンション付き通知を試行
       try {
-        await fetch(slackWebhookUrl.value(), {
+        await fetch(webhook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: `${mention}日次レポート配信に失敗しました（${response.status} ${response.statusText}）` })
@@ -1198,7 +1217,21 @@ export const deliverWeeklyReport = onRequest({
       if (settings?.errorMentionUserId) mention = `<@${settings.errorMentionUserId}> `;
     } catch {}
 
-    const response = await fetch(slackWebhookUrl.value(), {
+    // 設定の参照（Webhook/メンション）
+    let mentionPrefix = '';
+    let webhook = slackWebhookUrl.value();
+    try {
+      const settingsDoc = await db.collection("settings").doc("slack").get();
+      const settings = (settingsDoc.exists ? settingsDoc.data() : null) as SlackSettings | null;
+      if (settings?.deliveryMentionUserId) mentionPrefix = `<@${settings.deliveryMentionUserId}> `;
+      if (settings?.webhookUrl) webhook = settings.webhookUrl;
+    } catch {}
+
+    if (mentionPrefix) {
+      slackMessage.blocks.unshift({ type: 'section', text: { type: 'mrkdwn', text: `${mentionPrefix}` } });
+    }
+
+    const response = await fetch(webhook, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1209,7 +1242,7 @@ export const deliverWeeklyReport = onRequest({
     if (!response.ok) {
       // エラー時にメンション付き通知を試行
       try {
-        await fetch(slackWebhookUrl.value(), {
+        await fetch(webhook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: `${mention}週次レポート配信に失敗しました（${response.status} ${response.statusText}）` })
