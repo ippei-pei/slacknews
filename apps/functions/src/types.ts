@@ -39,6 +39,10 @@ export interface SlackSettings {
   channelId?: string;            // chat.postMessage 用
   deliveryMentionUserId?: string; // 配信時に先頭へ付与（任意）
   errorMentionUserId?: string;   // 例: U123ABCDEF（<@...>でメンション）
+  // スケジュール投稿設定
+  dailyReportTime?: string;      // 日次レポート投稿時間 (HH:MM形式、JST)
+  weeklyReportTime?: string;     // 週次レポート投稿時間 (HH:MM形式、JST)
+  weeklyReportDay?: number;      // 週次レポート投稿曜日 (0=日曜日、1=月曜日、...、6=土曜日)
   updatedAt: Date;
 }
 

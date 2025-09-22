@@ -27,18 +27,32 @@ export const getSlackSettings = onRequest(corsOptions, async (req, res) => {
 // Slack設定更新API
 export const updateSlackSettings = onRequest(corsOptions, async (req, res) => {
   try {
-    const { channelName, channelId, deliveryMentionUserId, errorMentionUserId } = req.body || {};
+    const { 
+      channelName, 
+      channelId, 
+      deliveryMentionUserId, 
+      errorMentionUserId,
+      dailyReportTime,
+      weeklyReportTime,
+      weeklyReportDay
+    } = req.body || {};
+    
     if (!channelName) {
       res.status(400).json({ success: false, error: "channelName is required" });
       return;
     }
+    
     const payload: SlackSettings = {
       channelName,
       channelId: channelId || null,
       deliveryMentionUserId: deliveryMentionUserId || null,
       errorMentionUserId: errorMentionUserId || null,
+      dailyReportTime: dailyReportTime || null,
+      weeklyReportTime: weeklyReportTime || null,
+      weeklyReportDay: weeklyReportDay !== undefined ? weeklyReportDay : null,
       updatedAt: new Date(),
     } as any;
+    
     await db.collection("settings").doc("slack").set(payload, { merge: true });
     res.json({ success: true, data: payload });
   } catch (error) {

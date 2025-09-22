@@ -43,6 +43,27 @@ export {
   deliverWeeklyReport
 } from './routes/reports';
 
+export {
+  // スケジュール管理
+  getScheduleSettings,
+  updateScheduleSettingsAPI,
+  testScheduleTask,
+  generateCronExpression
+} from './routes/schedule';
+
+export {
+  // スケジュール実行
+  scheduledDailyTask,
+  scheduledWeeklyTask
+} from './services/schedule';
+
+export {
+  // スケジュールテスト
+  testScheduleExecution,
+  testScheduleSettings,
+  testScheduleIntegration
+} from './routes/test-schedule';
+
 // export {
 //   // テスト用
 //   testRandomCollection
