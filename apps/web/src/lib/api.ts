@@ -42,6 +42,14 @@ export interface ApiResponse<T> {
   message?: string;
 }
 
+export interface SlackSettings {
+  channelName: string;
+  deliveryMentionUserId?: string | null;
+  errorMentionUserId?: string | null;
+  webhookUrl?: string | null;
+  updatedAt?: Date | string;
+}
+
 // 企業一覧取得
 export async function getCompanies(): Promise<ApiResponse<Company[]>> {
   try {
@@ -257,5 +265,30 @@ export async function deliverWeeklyReport(weekStart?: string): Promise<ApiRespon
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
     };
+  }
+}
+
+// Slack設定 取得
+export async function getSlackSettings(): Promise<ApiResponse<SlackSettings | null>> {
+  try {
+    const response = await fetch(`${API_BASE}/getSlackSettings`);
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+// Slack設定 更新
+export async function updateSlackSettings(payload: SlackSettings): Promise<ApiResponse<SlackSettings>> {
+  try {
+    const response = await fetch(`${API_BASE}/updateSlackSettings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await response.json();
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
