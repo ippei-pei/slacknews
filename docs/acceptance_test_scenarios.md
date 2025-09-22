@@ -17,6 +17,57 @@
 
 ## 2. 最重要テストシナリオ
 
+### シナリオ0: 企業登録→情報収集→DB格納→重複排除→翻訳→日次配信→週次配信（E2E）
+
+#### 前提条件
+- 管理画面とFunctionsがデプロイ済み
+- Secretに`openai-api-key`/`openai-api-url`/`slack-webhook-url`が設定済み
+- Firestoreが利用可能
+
+#### テスト手順
+1. 企業登録（3社以上推奨）
+   - 管理画面「企業管理」で新規企業を登録
+   - 各社に少なくとも1つの`RSS URL`または`Reddit URL`を設定
+   - 期待: `companies`コレクションにドキュメントが作成され、`isActive: true`
+
+2. 情報収集の実行
+   - 管理画面の操作 or `runCollection` をHTTP POSTで実行
+   - 期待: ログに「Starting news collection process...」「Added news: ...」が出力
+
+3. DB格納の確認
+   - Firestoreの`news`コレクションを確認
+   - 期待: 収集分の記事が作成され、主なフィールドが設定済み
+     - `companyId`, `title`, `content|summary`, `url`, `publishedAt`, `category`
+     - `isDeliveryTarget: true`, `isTranslated: false`, `deliveryStatus: 'pending'`
+
+4. 重複排除の確認（URLベース）
+   - 同一URLの項目が2件以上保存されていないことを確認
+   - 期待: `companyId+url`が一致する記事はスキップされ、保存件数が増えない
+
+5. 翻訳の実行
+   - 管理画面の操作 or `translateDeliveryTargetNews` をHTTP POSTで実行
+   - 期待: 対象記事に`translatedTitle`/`translatedContent`/`translatedSummary`が保存され、`isTranslated: true`
+
+6. 日次配信の実行
+   - 管理画面の操作 or `deliverDailyReport` をHTTP POSTで実行（`{ "date": "YYYY-MM-DD" }`任意）
+   - 期待: Slackに以下の形式で投稿
+     - ヘッダ「📰 日次ニュースレポート - YYYY-MM-DD」
+     - 先頭セクションにLLM生成の日次要約（重要度の記載なし）
+     - 続けて主要記事最大5件（タイトル+本文）
+
+7. 週次配信の実行
+   - 管理画面の操作 or `deliverWeeklyReport` をHTTP POSTで実行（`{ "weekStart": "YYYY-MM-DD" }`任意）
+   - 期待: Slackに以下の形式で投稿（LLM生成）
+     - 「競合の動きサマリ」（約200文字）
+     - 「各社の動きサマリ」（会社ごと約100文字）
+     - 「自社が取るべき動き」（約200文字）
+
+#### 期待結果
+- 企業登録→収集→格納→重複排除→翻訳→日次/週次配信の一連がエラーなく完了
+- Slack投稿は要件通り（重要度の表示なし、テキストのみ）
+- 重複記事が保存されないことをURLベースで確認
+- 翻訳済みフラグと翻訳フィールドが整合
+
 ### シナリオ1: 企業登録・基本設定
 
 #### **前提条件**
